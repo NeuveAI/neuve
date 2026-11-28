@@ -138,6 +138,8 @@ export type Transcript = {
 	draft: string;
 	busy: boolean;
 	live: boolean;
+	/** The replay left out the chat's older entries. */
+	older: boolean;
 	/** Whether teammates may invoke agents, from the newest metadata event that reported it. */
 	shared?: boolean;
 	desktop?: boolean;
@@ -162,6 +164,7 @@ const EMPTY: Transcript = {
 	draft: "",
 	busy: false,
 	live: false,
+	older: false,
 };
 
 /** Folds channel events into timeline items: tool calls attach to the reply that made them. */
@@ -363,7 +366,7 @@ export function apply(state: Transcript, event: Event): Transcript {
 			return { ...state, items: [...state.items, item] };
 		}
 		case "live":
-			return { ...state, live: true };
+			return { ...state, live: true, older: !!event.older };
 		case "agent":
 			return state;
 		case "metadata": {
@@ -424,7 +427,6 @@ function pick(event: Extract<Event, { kind: "message" }>) {
 	};
 }
 
-/** Automatic re-watches allowed before a watch stays open for `STABLE` ms. */
 /** Typists send a signal every few seconds while writing; one this old has stopped. */
 const TYPING = 5000;
 
@@ -441,8 +443,35 @@ export function useTyping(typing: Record<string, number>): string[] {
 	return fresh.map(([author]) => author);
 }
 
+/** Automatic re-watches allowed before a watch stays open for `STABLE` ms. */
 const RECOVERIES = 3;
 const STABLE = 60_000;
+
+/** A chat opens with its newest turns and loads older ones a page at a time, as T3 Code pages a thread. */
+const TURNS = 10;
+const OLDER = 20;
+/** How long a left chat stays to be shown at once when it is opened again, as T3 Code keeps a thread. */
+const KEPT = 5 * 60_000;
+
+type Kept = { transcript: Transcript; info?: ChannelInfo; turns: number };
+const kept = new Map<string, Kept & { at: number }>();
+
+/**
+ * Keeps a left chat's complete transcript, without what was streaming, typed or returned to the
+ * composer as it was left: the replay brings back what still holds.
+ */
+export function keep(key: string, value: Kept, now = Date.now()) {
+	for (const [other, { at }] of kept) if (now - at > KEPT) kept.delete(other);
+	if (!value.transcript.live) return void kept.delete(key);
+	const transcript = { ...value.transcript, draft: "", typing: {}, returned: [] };
+	kept.set(key, { ...value, transcript, at: now });
+}
+
+/** The chat's kept transcript, if it was left within `KEPT` ms. */
+export function reopen(key: string, now = Date.now()): Kept | undefined {
+	const value = kept.get(key);
+	return value && now - value.at <= KEPT ? value : undefined;
+}
 
 /**
  * Watches open per channel. `release` drops every watch this client has on a channel, so the work
@@ -462,8 +491,27 @@ export function useTranscript(
 	offline: boolean,
 	placement: string,
 ) {
-	const [state, setState] = useState<Transcript>(EMPTY);
-	const [info, setInfo] = useState<ChannelInfo>();
+	// A chat left within `KEPT` ms draws its kept transcript at once while the watch catches up.
+	const opened = `${channel}/${chat}`;
+	const opening = () => reopen(opened) ?? { transcript: EMPTY, info: undefined, turns: TURNS };
+	const [state, setState] = useState(() => opening().transcript);
+	const [info, setInfo] = useState(() => opening().info);
+	const [turns, setTurns] = useState(() => opening().turns);
+	const [shown, setShown] = useState(opened);
+	if (channel && opened !== shown) {
+		const next = opening();
+		setShown(opened);
+		setState(next.transcript);
+		setInfo(next.info);
+		setTurns(next.turns);
+	}
+	// What is shown as of the last commit, for the watch's cleanup to keep.
+	const latest = useRef<Kept>(undefined);
+	useEffect(() => {
+		latest.current = { transcript: state, info, turns };
+	});
+	/** Older turns were asked for and the larger replay is not complete yet. */
+	const loading = useRef(false);
 	const [error, setError] = useState<string>();
 	/** The channel's worker ended the watch and a re-watch is waiting for it to come back. */
 	const [restarting, setRestarting] = useState(false);
@@ -489,6 +537,8 @@ export function useTranscript(
 	if (placement !== placed) {
 		setPlaced(placement);
 		setAttempt((value) => value + 1);
+		setState(EMPTY);
+		setInfo(undefined);
 	}
 	useEffect(() => {
 		if (!channel) return;
@@ -497,8 +547,6 @@ export function useTranscript(
 		let generation = 0;
 		let recoveries = 0;
 		let started = 0;
-		setState(EMPTY);
-		setInfo(undefined);
 		const start = (restart = false) => {
 			const version = ++generation;
 			started = Date.now();
@@ -511,8 +559,8 @@ export function useTranscript(
 				start(reason === CHANNEL_CLOSED);
 				return true;
 			};
-			// A re-watch replays the whole chat; the shown transcript stays until the replay is
-			// complete so the timeline, and what is expanded in it, stays mounted.
+			// A re-watch replays the chat; the shown transcript stays until the replay is complete so
+			// the timeline, and what is expanded in it, stays mounted.
 			let replay: Transcript | undefined = EMPTY;
 			// The chats info names, and those a read already under way is for.
 			const known = new Set<number>();
@@ -548,6 +596,7 @@ export function useTranscript(
 				approvals: true,
 				planComments: true,
 				builds: true,
+				turns,
 				...(chat === undefined ? {} : { chat }),
 			}, {
 				event(event) {
@@ -557,6 +606,7 @@ export function useTranscript(
 					else {
 						setState(apply(replay, event));
 						setRestarting(false);
+						loading.current = false;
 						replay = undefined;
 					}
 					// Any chat's model change comes as its `agent` event; a mode change only info holds.
@@ -602,12 +652,13 @@ export function useTranscript(
 		return () => {
 			active = false;
 			off();
+			if (latest.current) keep(`${channel}/${chat}`, latest.current);
 			const left = watching.get(channel)! - 1;
 			if (left) return void watching.set(channel, left);
 			watching.delete(channel);
 			host.request({ op: "release", channel }).catch(() => {});
 		};
-	}, [channel, chat, attempt]);
+	}, [channel, chat, attempt, turns]);
 	// Hosts that predate sharing in metadata events report it only through `info`, which is not
 	// read again after a share; `sharedLive` says whether changes will arrive.
 	const shared = state.shared ?? info?.shared;
@@ -622,5 +673,11 @@ export function useTranscript(
 		error,
 		restarting,
 		retry: () => setAttempt((value) => value + 1),
+		/** Watches again with older turns, one load at a time, while the replay left some out. */
+		more: () => {
+			if (!state.older || loading.current) return;
+			loading.current = true;
+			setTurns((value) => value + OLDER);
+		},
 	};
 }

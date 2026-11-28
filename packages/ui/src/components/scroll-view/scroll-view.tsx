@@ -46,6 +46,8 @@ type ScrollViewProps = Omit<ComponentPropsWithRef<"div">, "children" | "onScroll
 	overscan?: number;
 	/** Render callback — receives item index and viewport width. */
 	children: ScrollViewRender;
+	/** Each item's identity, so the item in view stays in place when items arrive above it. */
+	itemKey?: (index: number) => string | undefined;
 	/** Called with the actually visible item range and bottom-pinned state. */
 	onRangeChange?: (range: ScrollViewRange) => void;
 	/** Called when native scrolling starts changing the viewport. */
@@ -64,6 +66,7 @@ function ScrollView(
 		end = 0,
 		overscan = 300,
 		children,
+		itemKey,
 		onRangeChange,
 		onScrollStart,
 		onScrollEnd,
@@ -84,6 +87,9 @@ function ScrollView(
 	let resized = useRef(false);
 	let scrolling = useRef(false);
 	let project = useRef<(flush: boolean) => void>(() => {});
+	let identify = useRef(itemKey);
+	// The first visible item with an identity, as of the last projection.
+	let anchor = useRef<{ index: number; key: string } | null>(null);
 	let report = useRef(onRangeChange);
 	let started = useRef(onScrollStart);
 	let settled = useRef(onScrollEnd);
@@ -137,6 +143,7 @@ function ScrollView(
 
 	useLayoutEffect(() => {
 		frameRef.current = frame;
+		identify.current = itemKey;
 		report.current = onRangeChange;
 		started.current = onScrollStart;
 		settled.current = onScrollEnd;
@@ -227,6 +234,14 @@ function ScrollView(
 			}
 
 			let exact = scroll.visible(f, el.scrollTop, el.clientHeight);
+			anchor.current = null;
+			for (let i = exact.start; i < exact.end && identify.current; i++) {
+				let key = identify.current(i);
+				if (key) {
+					anchor.current = { index: i, key };
+					break;
+				}
+			}
 			notify({ ...exact, pinned: bottom });
 		};
 	});
@@ -321,8 +336,17 @@ function ScrollView(
 			el.scrollTop = Math.max(0, frame.total - el.clientHeight);
 		} else if (prev !== frame && prev.items.length > 0) {
 			let { start } = scroll.visible(prev, el.scrollTop, el.clientHeight);
-			let prevItem = prev.items[start];
-			let nextItem = frame.items[start];
+			let from = start;
+			let to = start;
+			let held = anchor.current;
+			for (let i = 0; held && i < frame.items.length; i++) {
+				if (identify.current?.(i) !== held.key) continue;
+				from = held.index;
+				to = i;
+				break;
+			}
+			let prevItem = prev.items[from];
+			let nextItem = frame.items[to];
 			if (prevItem && nextItem) {
 				let offset = el.scrollTop - prevItem.top;
 				let max = Math.max(0, frame.total - el.clientHeight);

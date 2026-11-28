@@ -368,4 +368,9 @@ test("settled requests stay through their turn; open ones always show", () => {
 	expect(ids([message(500)])).toEqual(["a", "m", "o"]);
 	expect(ids([message(500), message(2000)])).toEqual(["m", "o"]);
 	expect(ids([message(500), message(2000), message(3000)])).toEqual(["o"]);
+	// A chat that opens with its recent turns may not hold the asks that settled an older request.
+	const recent = (items: Item[]) =>
+		shownApprovals([answered, byMessage, open], items, true).map((value) => value.requestId);
+	expect(recent([message(2000)])).toEqual(["o"]);
+	expect(recent([message(500), message(2000)])).toEqual(["m", "o"]);
 });
