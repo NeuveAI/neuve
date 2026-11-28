@@ -102,6 +102,7 @@ type Generation = {
   toolOffer?: SystemMessage;
   pluginTools?: ReadonlySet<string>;
   mcpServers?: SessionPolicy["mcpServers"];
+  deferredTools?: ReadonlySet<string>;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -117,6 +118,7 @@ const planningRequest = Symbol.for("neuve.chat.plan-request");
 
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
+const deferredPluginTools = Symbol.for("neuve.chat.deferred-plugin-tools");
 
 function offeredMessages(
   generation: Generation,
@@ -318,6 +320,8 @@ export class ChatRuntimeBridge {
     const requested = normalizeContext(context).messages;
     const pluginTools: unknown =
       options && Reflect.get(options, sandboxPluginTools);
+    const deferredTools: unknown =
+      options && Reflect.get(options, deferredPluginTools);
     const toolOffer = requested.find(
       (message): message is SystemMessage =>
         message.role === "system" && Object.hasOwn(message, planningRequest),
@@ -364,6 +368,7 @@ export class ChatRuntimeBridge {
       ...(toolOffer === undefined ? {} : { toolOffer }),
       ...(pluginTools instanceof Set ? { pluginTools } : {}),
       ...(mcpServers === undefined ? {} : { mcpServers }),
+      ...(deferredTools instanceof Set ? { deferredTools } : {}),
       cleanup: [],
       message: {
         role: "assistant",
@@ -681,6 +686,7 @@ export class ChatRuntimeBridge {
         ownTools: route.capabilities.ownTools,
         pluginTools: gen.pluginTools,
         mcpServers: gen.mcpServers,
+        deferredTools: gen.deferredTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
       },
@@ -938,6 +944,7 @@ export class ChatRuntimeBridge {
           ownTools: route.capabilities.ownTools,
           pluginTools: gen.pluginTools,
           mcpServers: gen.mcpServers,
+          deferredTools: gen.deferredTools,
           approvals: route.capabilities.approvals,
           attended: gen.attended,
         },

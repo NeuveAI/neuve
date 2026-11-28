@@ -57,7 +57,7 @@ import type { UserInput } from "./generated/v2/UserInput";
 import {
   codexEnvironment,
   launchArguments,
-  NEUVE_SERVER,
+  type ToolServers,
   turnSettings,
   unaddressable,
   type CodexTokenCommand,
@@ -67,7 +67,7 @@ import {
 import { protocolLog, type LogEntry } from "./log.ts";
 import { replaceKnown } from "./redact.ts";
 import { CodexProcess } from "./services.ts";
-import { serveTools, toolHandler, type RunTool } from "./tools.ts";
+import { serveTools, type RunTool } from "./tools.ts";
 import { judge, versionOf } from "./version.ts";
 
 export const capabilities: RuntimeCapabilities = {
@@ -959,7 +959,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
   const startProcess = (
     configuration: Configuration,
     settings: OwnSettings,
-    toolServer: string | undefined,
+    toolServers: ToolServers | undefined,
     cwd: string,
     tokenCommand?: CodexTokenCommand,
     mcpServers?: SessionPolicy["mcpServers"],
@@ -977,7 +977,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         scope,
         configuration,
         settings,
-        toolServer,
+        toolServers,
         cwd,
         tokenCommand,
         mcpServers,
@@ -987,20 +987,20 @@ export const openCodexSession = Effect.fnUntraced(function* (
     scope: Scope.Closeable,
     configuration: Configuration,
     settings: OwnSettings,
-    toolServer: string | undefined,
+    toolServers: ToolServers | undefined,
     cwd: string,
     tokenCommand: CodexTokenCommand | undefined,
     mcpServers: SessionPolicy["mcpServers"],
   ) =>
     Effect.gen(function* () {
       const gen = ++generation;
-      const secrets = toolServer === undefined ? [] : [token];
+      const secrets = toolServers === undefined ? [] : [token];
       const connected = yield* connect({
         program: options.program,
         args: launchArguments(
           configuration,
           settings,
-          toolServer,
+          toolServers,
           tokenCommand,
           policy.environment,
           mcpServers,
@@ -1008,7 +1008,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         env: codexEnvironment(
           { ...options.environment, ...policy.environment },
           options.codexHome,
-          toolServer === undefined ? undefined : token,
+          toolServers === undefined ? undefined : token,
         ),
         secrets,
         cwd,
@@ -1196,10 +1196,10 @@ export const openCodexSession = Effect.fnUntraced(function* (
       );
     }).pipe(Effect.catchCause(() => Effect.succeed(false)));
 
-  let toolServer: string | undefined;
+  let toolServers: ToolServers | undefined;
   // The server's name is ours only if this session started it.
   const ours = (name: string) =>
-    toolServer !== undefined && name === NEUVE_SERVER;
+    toolServers !== undefined && Object.hasOwn(toolServers, name);
   const runTool: RunTool = (definition, input, signal, nativeId) =>
     runPromise(
       Effect.gen(function* () {
@@ -1273,8 +1273,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       }),
     );
 
-  const collides = (settings: OwnSettings) =>
-    policy.tools.length > 0 && settings.mcpServers.includes(NEUVE_SERVER);
+  const collides = (settings: OwnSettings) => settings.mcpServers.some(ours);
   const live = (active?: Turn) =>
     !dead && (active === undefined || !active.finished);
   /** After every wait, before anything more is written: the session and the turn still live. */
@@ -1327,7 +1326,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
       const next = yield* startProcess(
         configuration,
         settings,
-        toolServer,
+        toolServers,
         options.cwd,
         neuveSignIn?.tokenCommand,
         policy.mcpServers,
@@ -1407,13 +1406,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
     });
 
   if (policy.tools.length > 0)
-    toolServer = yield* serveTools(
-      toolHandler(policy.tools, token, runTool),
-    ).pipe(
+    toolServers = yield* serveTools(policy.tools, token, runTool).pipe(
       Scope.provide(sessionScope),
       Effect.catchDefect(() => Effect.fail(unavailable("start-failed"))),
     );
-  if (toolServer !== undefined) log?.serves();
+  if (toolServers !== undefined) log?.serves(toolServers);
   yield* Effect.addFinalizer(() =>
     stop({ status: "interrupted", reason: "shutdown" }, true).pipe(
       Effect.andThen(

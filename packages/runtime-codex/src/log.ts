@@ -3,7 +3,7 @@
 import { appendFileSync } from "node:fs";
 import { hostname } from "node:os";
 import type { Line } from "./client.ts";
-import { NEUVE_SERVER } from "./launch.ts";
+import type { ToolServers } from "./launch.ts";
 import { redact } from "./redact.ts";
 
 export interface LogEntry {
@@ -39,10 +39,13 @@ const DELTA = /\/(delta|outputDelta|summaryTextDelta|textDelta)$/;
  * tool's name and its status, and loses its arguments, result and error, which are the person's.
  */
 const SERVER_NAMED = /^(mcpServer\/|item\/(started|completed)$)/;
-const named = (message: Record<string, unknown>, serving: boolean) => {
+const named = (
+  message: Record<string, unknown>,
+  serving: ReadonlySet<string>,
+) => {
   const params = (message.params ?? {}) as Record<string, unknown>;
   const item = params.item as Record<string, unknown> | undefined;
-  const ours = (name: unknown) => serving && name === NEUVE_SERVER;
+  const ours = (name: unknown) => typeof name === "string" && serving.has(name);
   const label = (name: unknown) => (ours(name) ? name : "<server>");
   return {
     ...message,
@@ -74,7 +77,7 @@ const named = (message: Record<string, unknown>, serving: boolean) => {
 export const protocolLog = (sink: (entry: LogEntry) => void) => {
   const known = new Map([[hostname(), "<host>"]]);
   const whole = new Set<unknown>();
-  let serving = false;
+  let serving: ReadonlySet<string> = new Set();
   const shape = (line: Line): unknown => {
     const message = line.message as Record<string, unknown> | null;
     if (message === null || typeof message !== "object") return message;
@@ -105,8 +108,8 @@ export const protocolLog = (sink: (entry: LogEntry) => void) => {
     return message;
   };
   return {
-    serves: () => {
-      serving = true;
+    serves: (servers: ToolServers) => {
+      serving = new Set(Object.keys(servers));
     },
     know: (value: string, label: string) => {
       if (!known.has(value)) known.set(value, label);

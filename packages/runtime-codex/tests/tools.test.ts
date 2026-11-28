@@ -10,6 +10,7 @@ import {
   type ToolDefinition,
 } from "@neuve/runtime";
 import { Effect, Exit, Queue, Scope, Stream } from "effect";
+import { launchArguments } from "../src/launch.ts";
 import { openCodexSession } from "../src/session.ts";
 import { toolHandler } from "../src/tools.ts";
 import { codex, completed } from "./codex-fake.ts";
@@ -52,13 +53,24 @@ const call = (n: number) => ({
 
 test("the server checks the session token and lists the tools an unknown call can use", async () => {
   const handler = toolHandler(
-    [probe, { ...probe, name: "inspect" }],
+    [
+      probe,
+      { ...probe, name: "inspect" },
+      { ...probe, name: "lookup", deferred: true },
+    ],
     "secret",
-    async () => ({ content: [] }),
+    async (definition, input, _signal, callId) => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ name: definition.name, input, callId }),
+        },
+      ],
+    }),
   );
   const list = { jsonrpc: "2.0", id: 1, method: "tools/list" };
-  const request = (token?: string, body: unknown = list) =>
-    new Request("http://127.0.0.1/mcp", {
+  const request = (token?: string, body: unknown = list, path = "/mcp") =>
+    new Request(`http://127.0.0.1${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -76,6 +88,32 @@ test("the server checks the session token and lists the tools an unknown call ca
       tools: [
         { name: "probe", annotations: { readOnlyHint: true } },
         { name: "inspect" },
+      ],
+    },
+  });
+  expect(
+    (await handler(request("Bearer wrong!", list, "/plugins/mcp"))).status,
+  ).toBe(401);
+  expect(
+    await (
+      await handler(request("Bearer secret", list, "/plugins/mcp"))
+    ).json(),
+  ).toMatchObject({ result: { tools: [{ name: "lookup" }] } });
+  const lookup = { ...call(1), params: { ...call(1).params, name: "lookup" } };
+  expect(
+    await (await handler(request("Bearer secret", lookup))).json(),
+  ).toMatchObject({ result: { isError: true } });
+  expect(
+    await (
+      await handler(request("Bearer secret", lookup, "/plugins/mcp"))
+    ).json(),
+  ).toMatchObject({
+    result: {
+      content: [
+        {
+          type: "text",
+          text: '{"name":"lookup","input":{"n":1},"callId":"exec-1"}',
+        },
       ],
     },
   });
@@ -117,6 +155,7 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
               name: "fails",
               handle: () => Effect.die("fixture failure"),
             },
+            { ...probe, name: "lookup", deferred: true },
           ],
           approvalPolicy: "allow",
           turnLimit: TurnLimit.parse(8),
@@ -137,6 +176,10 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       const url = /mcp_servers\.neuve\.url="([^"]+)"/.exec(args.join(" "))![1]!;
       // Bound to the loopback interface only: the address given is the one the server listens on.
       expect(url).toStartWith("http://127.0.0.1:");
+      const plugin = /mcp_servers\.neuve_plugins\.url="([^"]+)"/.exec(
+        args.join(" "),
+      )![1]!;
+      expect(plugin).toBe(new URL("/plugins/mcp", url).href);
       const token = env.NEUVE_CODEX_TOOL_TOKEN!;
       expect(args).toContain(
         'mcp_servers.neuve.bearer_token_env_var="NEUVE_CODEX_TOOL_TOKEN"',
@@ -153,10 +196,13 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       yield* session.startTurn({
         turnId: "turn",
         message: "go",
-        workspace: { folder: "/work", access: "read-only" },
+        workspace: { folder: "/work", access: "write" },
       });
       const ran = yield* Effect.promise(() =>
-        rpc(url, token, call(1)).then((r) => r.json()),
+        rpc(plugin, token, {
+          ...call(1),
+          params: { ...call(1).params, name: "lookup" },
+        }).then((r) => r.json()),
       );
       expect(ran).toMatchObject({
         result: { content: [{ type: "text", text: "ran" }], isError: false },
@@ -181,6 +227,22 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
           content: [{ type: "text", text: "The tool failed." }],
         },
       });
+      fake.send("item/completed", {
+        threadId: "thread-1",
+        turnId: "codex-turn",
+        completedAtMs: 0,
+        item: {
+          type: "mcpToolCall",
+          id: "exec-1",
+          server: "neuve_plugins",
+          tool: "lookup",
+          status: "completed",
+          arguments: { n: 1 },
+          result: null,
+          error: null,
+          durationMs: null,
+        },
+      });
       expect(seen.map((s) => s.input)).toEqual([{ n: 1 }, { n: 0 }]);
       fake.send("turn/completed", completed("completed"));
       while ((yield* Queue.take(queue)).type !== "turn.finished");
@@ -199,7 +261,7 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       ]);
       // The call carries Codex's own id for it, the id of its item.
       expect(events[2]).toMatchObject({
-        toolName: "probe",
+        toolName: "lookup",
         callId: "exec-1",
         input: { n: 1 },
       });
@@ -305,4 +367,36 @@ test('Codex gets "Stopped." when a Neuve tool call is interrupted', async () => 
       yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(fake.layer), Effect.timeout("5 seconds")),
   );
+});
+
+test("Codex loads only the core endpoint eagerly and keeps the person's write tools enabled", () => {
+  const own = {
+    mcpServers: ["personal"],
+    plugins: ["personal-plugin"],
+    apps: [],
+    skills: [],
+    exclude: ["OTHER"],
+  };
+  const urls = {
+    neuve: "http://127.0.0.1:1234/mcp",
+    neuve_plugins: "http://127.0.0.1:1234/plugins/mcp",
+  };
+  const args = launchArguments("own", own, urls);
+  expect(args.filter((arg) => arg.includes("omit_tools_from"))).toEqual([
+    'mcp_servers.neuve.omit_tools_from=["deferred","code_mode"]',
+  ]);
+  expect(args).toContain(
+    'mcp_servers.neuve_plugins.bearer_token_env_var="NEUVE_CODEX_TOOL_TOKEN"',
+  );
+  expect(args).toContain(
+    'mcp_servers.neuve_plugins.default_tools_approval_mode="approve"',
+  );
+  expect(args).not.toContain("mcp_servers.personal.enabled=false");
+  expect(args).not.toContain("plugins.personal-plugin.enabled=false");
+  const clean = launchArguments("clean", own, { neuve: urls.neuve });
+  expect(clean).toContain("mcp_servers.personal.enabled=false");
+  expect(clean).toContain("plugins.personal-plugin.enabled=false");
+  expect(
+    clean.some((arg) => arg.startsWith("mcp_servers.neuve_plugins.")),
+  ).toBe(false);
 });

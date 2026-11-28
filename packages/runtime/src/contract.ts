@@ -111,6 +111,7 @@ export interface ToolSpec<I = unknown> {
 /** handle receives raw input; the definition's builder parses it with input, as the harness does. */
 export interface ToolDefinition extends ToolSpec {
   readonly inputSchema: JsonSchema;
+  readonly deferred?: true;
 }
 /** A carried plugin's stdio server, started by the runtime's own MCP client. */
 export type McpStdioServer = {

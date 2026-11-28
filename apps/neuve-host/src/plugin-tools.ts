@@ -168,7 +168,7 @@ async function connect(
 				names.add(name);
 				accepted++;
 				if (config.type === "http") connection.httpTools.push(name);
-				tools.push(defineTool({
+				tools.push(Object.assign(defineTool({
 					name,
 					description,
 					parameters: Type.Unsafe<Record<string, unknown>>(tool.inputSchema),
@@ -204,7 +204,7 @@ async function connect(
 							log(outcome === "ok" ? "info" : "warn", "plugin.tool.call", { plugin: plugin.name, tool: name, outcome });
 						}
 					},
-				}));
+				}), { deferred: true }));
 			}
 			let guidance = client.getInstructions() ?? "";
 			for (const value of credentials.values()) {
@@ -428,7 +428,14 @@ export function pluginTools(
 			const description = `## Plugin: ${plugin.displayName}\n${plugin.description}`;
 			const { instructions, tools } = connected;
 			const text = instructions.length ? [description, "### MCP Server Instructions", ...instructions].join("\n\n") : description;
-			registry.install({ name, tools, sections: tools.length ? [{ key: name, tag: false, render: () => text }] : [] });
+			registry.install({ name, tools, sections: tools.length ? [{
+				key: name,
+				tag: false,
+				render: ({ agent }) => agent.tools.length ? [text, "### Tools", agent.tools.map(tool => {
+					const description = tool.description.trim().split(/(?<=[.!?])\s|[\r\n\u2028\u2029]/u, 1)[0]?.slice(0, 100);
+					return description ? `- \`${tool.name}\` ${description}` : `- \`${tool.name}\``;
+				}).join("\n")].join("\n\n") : text,
+			}] : [] });
 		} finally {
 			settleStartup(state);
 		}

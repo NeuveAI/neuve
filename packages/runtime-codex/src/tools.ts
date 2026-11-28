@@ -15,6 +15,15 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { mcpTool, unknownTool, type ToolDefinition } from "@neuve/runtime";
 import { Effect, type Scope } from "effect";
+import {
+  NEUVE_PLUGINS_SERVER,
+  NEUVE_SERVER,
+  type ToolServers,
+} from "./launch.ts";
+
+const CORE_PATH = "/mcp";
+const PLUGINS_PATH = "/plugins/mcp";
+const pluginTool = (tool: ToolDefinition) => tool.deferred === true;
 
 /** A call that reached the server: what the session runs, and what Codex gets back. */
 export type RunTool = (
@@ -35,16 +44,41 @@ export const toolHandler = (
   run: RunTool,
 ) => {
   const expected = Buffer.from(`Bearer ${token}`);
+  const endpoints = new Map([
+    [
+      CORE_PATH,
+      mcpEndpoint(
+        NEUVE_SERVER,
+        definitions.filter((tool) => !pluginTool(tool)),
+        run,
+      ),
+    ],
+    [
+      PLUGINS_PATH,
+      mcpEndpoint(NEUVE_PLUGINS_SERVER, definitions.filter(pluginTool), run),
+    ],
+  ]);
+  return async (request: Request): Promise<Response> => {
+    const given = Buffer.from(request.headers.get("authorization") ?? "");
+    if (given.length !== expected.length || !timingSafeEqual(given, expected))
+      return new Response(null, { status: 401 });
+    const endpoint = endpoints.get(new URL(request.url).pathname);
+    return endpoint ? endpoint(request) : new Response(null, { status: 404 });
+  };
+};
+
+const mcpEndpoint = (
+  name: string,
+  definitions: ReadonlyArray<ToolDefinition>,
+  run: RunTool,
+) => {
   const tools = definitions.map((definition) => ({
     ...mcpTool(definition),
     inputSchema: ToolSchema.shape.inputSchema.parse(definition.inputSchema),
   }));
   return async (request: Request): Promise<Response> => {
-    const given = Buffer.from(request.headers.get("authorization") ?? "");
-    if (given.length !== expected.length || !timingSafeEqual(given, expected))
-      return new Response(null, { status: 401 });
     const server = new Server(
-      { name: "neuve", version: "0.1.0" },
+      { name, version: "0.1.0" },
       { capabilities: { tools: {} } },
     );
     server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
@@ -74,7 +108,11 @@ export const toolHandler = (
 };
 
 /** Serves the handler on 127.0.0.1 until the scope closes; returns the address Codex is given. */
-export const serveTools = (handler: (request: Request) => Promise<Response>) =>
+export const serveTools = (
+  definitions: ReadonlyArray<ToolDefinition>,
+  token: string,
+  run: RunTool,
+) =>
   Effect.acquireRelease(
     Effect.sync(() =>
       Bun.serve({
@@ -82,11 +120,21 @@ export const serveTools = (handler: (request: Request) => Promise<Response>) =>
         port: 0,
         // A call lasts as long as its handler; the scope's end stops the server.
         idleTimeout: 0,
-        fetch: handler,
+        fetch: toolHandler(definitions, token, run),
       }),
     ),
     (server) => Effect.promise(() => server.stop(true)),
   ).pipe(
     // The address is the one bound, so a test that reads it sees where the server listens.
-    Effect.map((server) => `http://${server.hostname}:${server.port}/mcp`),
-  ) satisfies Effect.Effect<string, never, Scope.Scope>;
+    Effect.map((server): ToolServers => {
+      const origin = `http://${server.hostname}:${server.port}`;
+      return {
+        ...(definitions.some((tool) => !pluginTool(tool))
+          ? { [NEUVE_SERVER]: origin + CORE_PATH }
+          : {}),
+        ...(definitions.some(pluginTool)
+          ? { [NEUVE_PLUGINS_SERVER]: origin + PLUGINS_PATH }
+          : {}),
+      };
+    }),
+  ) satisfies Effect.Effect<ToolServers, never, Scope.Scope>;

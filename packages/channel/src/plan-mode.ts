@@ -121,10 +121,12 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
 const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
+const deferredPluginTools = Symbol.for("neuve.chat.deferred-plugin-tools");
 const requestMode = "neuve.chat.request-mode";
 
 export type PluginOffers = {
 	httpTools(): ReadonlySet<string>;
+	deferredTools?(): ReadonlySet<string>;
 	nativeServers?(folder?: string): SessionPolicy["mcpServers"];
 	nativeTool?(name: string): boolean;
 };
@@ -164,10 +166,13 @@ export function planModeModels(
 			Object.defineProperty(offer, planningRequest, { value: mode === "plan" });
 			if (mode === "plan" || offer.toolsRemoved?.length) messages.push(offer);
 		}
-		const pluginTools = mode === "ace" ? plugins?.httpTools() : undefined;
-		const nativeServers = mode === "ace" && keepAttendance ? plugins?.nativeServers : undefined;
-		const streamOptions = pluginTools?.size || nativeServers
-			? { ...options, [sandboxPluginTools]: pluginTools, [nativePluginServers]: nativeServers }
+		const streamOptions = mode === "ace" && plugins && model.api === "neuve-runtime"
+			? {
+				...options,
+				[sandboxPluginTools]: plugins.httpTools(),
+				[deferredPluginTools]: plugins.deferredTools?.(),
+				[nativePluginServers]: keepAttendance ? plugins.nativeServers : undefined,
+			}
 			: options;
 		const stream = models.streamSimple(model, { ...request, messages }, streamOptions);
 		return new Proxy(stream, {

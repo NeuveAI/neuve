@@ -173,12 +173,14 @@ export function definitions(
     call: ToolCall | undefined,
     input: unknown,
   ) => Effect.Effect<import("@neuve/runtime").ToolOutcome>,
+  deferredTools?: ReadonlySet<string>,
 ): ToolDefinition[] {
   return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
     inputSchema: JsonSchema.parse(tool.parameters),
     strict: false,
+    ...(deferredTools?.has(tool.name) ? { deferred: true } : {}),
     hints: {
       readOnly: false,
       destructive: false,
@@ -198,6 +200,7 @@ export function policy(
     ownTools?: boolean;
     pluginTools?: ReadonlySet<string> | undefined;
     mcpServers?: SessionPolicy["mcpServers"];
+    deferredTools?: ReadonlySet<string> | undefined;
     approvals?: boolean;
     attended?: boolean;
   } = {},
@@ -249,7 +252,7 @@ export function policy(
       : undefined;
   return {
     systemPrompt: prompt.filter(Boolean).join("\n\n"),
-    tools: definitions(served, handle),
+    tools: definitions(served, handle, where.deferredTools),
     approvalPolicy,
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
@@ -269,10 +272,11 @@ export function policyKey(value: SessionPolicy): string {
     skillRoots: value.skillRoots,
     approvalPolicy: value.approvalPolicy,
     mcpServers: value.mcpServers,
-    tools: value.tools.map(({ name, description, inputSchema }) => ({
+    tools: value.tools.map(({ name, description, inputSchema, deferred }) => ({
       name,
       description,
       inputSchema,
+      deferred,
     })),
   });
 }

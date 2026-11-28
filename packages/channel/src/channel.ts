@@ -91,6 +91,7 @@ import {
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
 import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
+import { deferredPluginTool, pluginDiscovery, PLUGIN_SEARCH } from "./plugin-search";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
 import type {
@@ -312,9 +313,10 @@ export class Channel {
 		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
+		const { plugins } = options;
 		const modelSettings = new ModelSettings(options.models, options.defaultModel, options.extension?.thinkingLevel,
 			options.routeModel, options.accountStatuses);
-		registry.install(logging(log, options.plugins?.ownsTool));
+		registry.install(logging(log, plugins && (name => name === PLUGIN_SEARCH || plugins.ownsTool(name))));
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
@@ -385,7 +387,20 @@ export class Channel {
 		if (options.build?.query) registry.install(query);
 		const installGuarded = install(registry, options.extension, planning, !!options.planFileAccess, log,
 			(chat, scope) => channel.#builds.paused(chat, scope));
-		const { plugins } = options;
+		const nativeSearch = (model: ModelRef | undefined) => {
+			if (!model) return;
+			if (options.ownTools?.(model.provider)) return "codex";
+			if (options.models.getModel(model.provider, model.modelId)?.api === "neuve-runtime") return "claude";
+		};
+		const discovery = plugins && pluginDiscovery(
+			(id, context) => channel.#harness.conversation(id, context),
+			nativeSearch, planning, plugins.ownsTool,
+			async (tools, id, context) => tools.some(tool => plugins.nativeTool?.(tool.name)) &&
+				await approvals.attended(channel.#harness, id, context)
+				? tools.filter(tool => !plugins.nativeTool?.(tool.name))
+				: tools,
+		);
+		if (discovery) installGuarded(discovery.extension);
 		const unpublishedPlugins = new Set<string>();
 		const pluginRegistry = {
 			snapshot: () => registry.snapshot(),
@@ -399,25 +414,28 @@ export class Channel {
 				const names = new Set(extension.tools?.map(tool => tool.name));
 				return installGuarded({
 					...extension,
-					tools: extension.tools?.map(tool => !plugins?.nativeTool?.(tool.name) ? tool : {
-						...tool,
-						async execute(args, api, context) {
-							if (await approvals.attended(api, api.conversationId, context))
-								return { content: [{ type: "text", text: "This tool is unavailable in a person-driven chat." }], isError: true };
-							return tool.execute(args, api, context);
-						},
-					}) ?? [],
+					tools: extension.tools?.map(tool => discovery?.guard(tool) ?? tool),
 					sections: extension.sections?.map(section => ({
 						...section,
 						async render(input, context) {
-							const provider = input.agent.model?.provider;
-							const http = provider && options.ownTools?.(provider) ? plugins?.httpTools() : undefined;
-							if (!input.agent.tools.some(tool => names.has(tool.name) && (!http || http.has(tool.name)))) return;
-							if (plugins?.nativeTool && [...names].some(plugins.nativeTool) &&
-								((provider && approvals.receivesAttendance(provider)) ||
-									await approvals.attended(input.read, input.conversationId, context))) return;
 							if (await planning(input.conversationId, context)) return;
-							return section.render(input, context);
+							const search = nativeSearch(input.agent.model);
+							const http = search === "codex" ? plugins?.httpTools() : undefined;
+							const candidates = input.agent.tools.filter(tool => names.has(tool.name) &&
+								(!http || http.has(tool.name) || plugins?.nativeTool?.(tool.name)));
+							const hasNative = candidates.some(tool => plugins?.nativeTool?.(tool.name)) &&
+								!await approvals.attended(input.read, input.conversationId, context);
+							const tools = hasNative
+								? candidates
+								: candidates.filter(tool => !plugins?.nativeTool?.(tool.name));
+							if (!tools.length) return;
+							const text = await section.render({ ...input, agent: { ...input.agent, tools: search === "claude" ? [] : tools } }, context);
+							if (text === undefined || search === "claude") return text;
+							return `${text}\n\n${search === "codex"
+								? hasNative
+									? "Use Codex's tool discovery to load these tools on demand."
+									: "Use Codex's tool discovery to load tools from the `neuve_plugins` server on demand."
+								: `Use \`${PLUGIN_SEARCH}\` to load these tools before calling them.`}`;
 						},
 					})),
 				});
@@ -440,7 +458,10 @@ export class Channel {
 			: registry;
 		refreshPlugins?.();
 		const harness = await Harness.open(options.storage, {
-			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins),
+			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins && {
+				...plugins,
+				deferredTools: () => new Set(visible.snapshot().tools().flatMap(({ tool }) => deferredPluginTool(tool) ? [tool.name] : [])),
+			}),
 			registry: visible,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
