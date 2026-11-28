@@ -184,7 +184,7 @@ function clip(text: string, length: number): string {
 }
 
 /** Whether `(run ended)` already printed, so `ask` doesn't print a second ending. */
-let ended = false;
+let runEnded = false;
 /** Whether a reply failed or was stopped, so `ask` exits 1 for a script. */
 let unanswered = false;
 
@@ -243,7 +243,7 @@ function render(event: Event, info: ChannelInfo) {
 			return;
 		case "run":
 			if (event.state !== "end") return;
-			ended = true;
+			runEnded = true;
 			return console.log(dim(`${tag}  (run ended)`));
 	}
 }
@@ -252,18 +252,31 @@ function render(event: Event, info: ChannelInfo) {
 type Session = { request<T = unknown>(request: Request, watch?: Watch): Promise<T>; close(): void };
 
 /** Once watching; `ended` resolves when its channel or relaying host ends the watch. */
-async function watch(session: Session, replay = true): Promise<{ ended: Promise<void> }> {
+async function watch(session: Session, replay = true) {
 	const info = await session.request<ChannelInfo>({ op: "info" });
 	let live = false;
-	const ended = Promise.withResolvers<void>();
+	const closed = Promise.withResolvers<void>();
+	let runOpen = false;
+	let runEnd: PromiseWithResolvers<void> | undefined;
 	await session.request({ op: "watch", chat: chat(), stops: true, ...(replay && flags.plans ? { plans: true, planComments: true } : {}), ...(flags.builds ? { builds: true } : {}) }, {
 		event(event) {
 			if (event.kind === "live") return void (live = true);
 			if (live || replay) render(event, info);
+			if (event.kind === "run") {
+				runOpen = event.state === "start";
+				if (live && !runOpen) runEnd?.resolve();
+			}
 		},
-		closed: () => ended.resolve(),
+		closed: () => closed.resolve(),
 	});
-	return { ended: ended.promise };
+	return {
+		ended: closed.promise,
+		waitForRunEnd() {
+			if (runEnded && !runOpen) return;
+			runEnd = Promise.withResolvers<void>();
+			return Promise.race([runEnd.promise, closed.promise]);
+		},
+	};
 }
 
 function ago(at: number): string {
@@ -728,7 +741,7 @@ async function main() {
 							`Asked ${name}'s agent; the run continues. Follow it with: ace watch ${name}`,
 						);
 					}
-					await watch(session, false);
+					const watching = await watch(session, false);
 					const { submission } = await session.request<{ submission: number }>(body).catch(
 						refused,
 					);
@@ -737,7 +750,8 @@ async function main() {
 						process.exit(130);
 					});
 					const status = await session.request<string>({ op: "wait", submission });
-					if (status === "unanswered" && !ended) console.log(dim("  (stopped before answering)"));
+					await watching.waitForRunEnd();
+					if (status === "unanswered" && !runEnded) console.log(dim("  (stopped before answering)"));
 					if (status === "unanswered" || unanswered) process.exit(1);
 					return;
 				}

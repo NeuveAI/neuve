@@ -2338,6 +2338,7 @@ function live(chat: ChatId, event: AgentEvent): Event[] {
 	}
 	if (event.type === "run_start") return [{ kind: "run", chat, state: "start" }];
 	if (event.type === "run_end") return [{ kind: "run", chat, state: "end" }];
+	if (event.type === "snapshot") return [{ kind: "run", chat, state: event.run ? "start" : "end" }];
 	return [];
 }
 
