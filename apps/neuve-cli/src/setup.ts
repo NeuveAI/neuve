@@ -17,6 +17,7 @@ import {
   type OfferContext,
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
+import { repairCapture } from "./capture/setup-hooks.ts";
 import { ReviewRouteName } from "../../../packages/harness/src/settings.ts";
 import {
   RouteRefused,
@@ -393,9 +394,25 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     record: repositoryStepsRecord(layout.directory),
     where: repository,
   });
+  await repairCapture(
+    repository,
+    screen,
+    wanted.length === AGENT_IDS.length ? programs.found : undefined,
+  ).catch((error: unknown) => reportCaptureFailure(screen, repository, error));
   await screen.closing({ next: `neuve review HEAD~1..HEAD${repo}` });
   return 0;
 };
+
+const reportCaptureFailure = (
+  screen: Screen,
+  repository: string,
+  error: unknown,
+) =>
+  screen.step(
+    "failed",
+    "Capture",
+    `stopped in ${shown(repository)}: ${error instanceof Error ? error.message : String(error)}`,
+  );
 
 /** The skill offer's surroundings: setup's own screen, so it looks and asks the same way. */
 const skillsContext = (screen: Screen): SkillsContext => ({
@@ -587,6 +604,7 @@ export const upgradeSetup = async (input: {
     stateDirectory: string,
     repository: string,
   ) => ReadonlyArray<SetupStep>;
+  readonly foundPrograms?: () => Promise<ReadonlyArray<AgentHarness>>;
   readonly version: string;
   readonly screen: Screen;
   /** How to run this version's `neuve`, for the workers it restarts. */
@@ -688,6 +706,12 @@ export const upgradeSetup = async (input: {
       where: set.repository,
     }).catch(stopped(set.repository));
     note(outcome);
+    await repairCapture(repository, screen, input.foundPrograms).catch(
+      (error: unknown) => {
+        failed += 1;
+        return reportCaptureFailure(screen, repository, error);
+      },
+    );
   }
   // The list corrects itself: one line for the entries dropped, never one per entry.
   if (gone.size > 0) {
@@ -773,6 +797,7 @@ export const runSetupUpgrade = async (
   return upgradeSetup({
     home: homedir(),
     machine: machineSteps(programs.look),
+    foundPrograms: programs.found,
     repository: (stateDirectory, repository) =>
       repositorySteps(
         stateDirectory,

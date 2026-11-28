@@ -22,6 +22,7 @@ import {
   STORE_DIRECTORY_MODE,
   resolveStoreLocation,
   Starter,
+  type StoreLocation,
 } from "@neuve/records-core";
 import {
   agentsFlag,
@@ -41,7 +42,7 @@ import { Identity } from "@neuve/records-core/capture";
 import { setupStack } from "../stack-cli.ts";
 import { nameDiagnosticPath, repositoryRoot } from "../records-cli.ts";
 import { CLI_VERSION } from "../cli-version.ts";
-import { commandScreen, shown, type Mark } from "../terminal.ts";
+import { commandScreen, shown, type Mark, type Screen } from "../terminal.ts";
 
 /** A program not found, as its own line says it after its name. */
 const missingText = (finding: Finding) =>
@@ -84,17 +85,19 @@ Hooks only write the spool; the worker ingests it.
  *    written again.
  * 4. Each part's state means one thing everywhere (`CapturePart`): ok, needs an update, missing, or
  *    unreadable. An entry Neuve can't read surely is ok with a note.
- * 5. Reading changes nothing; only `setup hooks` writes, after a backup of the file it changes.
+ * 5. Reading changes nothing. Setup and upgrade reuse the hook writer for configured capture.
  *
  * A known limit: an agent that changes its hook file between `setup hooks`'s read and its rename
- * loses that change (the backup keeps the file as it was read). Which install an entry runs, a link
- * in place of a Git hook (it becomes a plain file), a version marker on entries and a trailer hook
+ * loses that change (the backup keeps the file as it was read). A link in place of a Git hook
+ * (it becomes a plain file), a version marker on entries and a trailer hook
  * to remove are left for later.
  */
 
 /** Marks files and entries this command owns, so a rerun replaces them and leaves the rest alone. */
 const MARKER = "neuve-capture-hook";
 const COMMAND_MARKER = `# ${MARKER}`;
+const CODEX_HOOK_TRUST =
+  "Codex asks you to review and trust new hooks the next time it starts.";
 
 /**
  * Whether an agent hook entry is this command's: it carries the marker. Entries written before the
@@ -158,6 +161,8 @@ const quote = (value: string) =>
   /^[\w@%+=:,./-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", `'\\''`)}'`;
+
+const shellCommand = (argv: readonly string[]) => argv.map(quote).join(" ");
 
 const git = async (cwd: string, args: ReadonlyArray<string>) => {
   const child = Bun.spawn(["git", "-C", cwd, ...args], {
@@ -277,6 +282,7 @@ export const gitHookScript = (
 interface Change {
   readonly path: string;
   readonly action: string;
+  readonly harness?: AgentHarness;
 }
 
 /** Whether Git would run the file as a hook: its owner may execute it. */
@@ -482,8 +488,8 @@ type AgentHooksState =
 /**
  * Neuve's entries for one agent in a parsed hook file, against what `setup hooks` writes: one entry
  * per event, under the event's own verb, with Neuve's command form, timeout and matcher, running
- * files that are there. The one judgement `setup hooks` reports from and doctor shows. Which install
- * an entry runs is not judged; `sameInstall` only says whether it is `prefix`.
+ * files that are there. The one judgement `setup hooks` reports from and doctor shows.
+ * `sameInstall` says whether the entries run the given prefix.
  */
 const judgeAgentHooks = async (
   file: HookFile,
@@ -643,7 +649,7 @@ const installAgentHooks = async (
   const next = `${JSON.stringify(built, null, 2)}\n`;
   // As it should be, whatever its layout: the same keys in the same order. Nothing is written.
   if (present && JSON.stringify(built) === JSON.stringify(read.raw))
-    return { path, action: "unchanged" };
+    return { path, harness, action: "unchanged" };
   // Neuve's entries already right and only their place or layout differs: said as that.
   const judged = present
     ? await judgeAgentHooks(read.file, harness, command)
@@ -652,6 +658,7 @@ const installAgentHooks = async (
   if (dryRun)
     return {
       path,
+      harness,
       action: reordered
         ? "would reorder"
         : present
@@ -661,6 +668,7 @@ const installAgentHooks = async (
   const backup = await replaceFile(path, next);
   return {
     path,
+    harness,
     action:
       backup === undefined
         ? `created with ${AGENT_EVENTS.length} ${harness} hooks`
@@ -701,19 +709,6 @@ export const runSetupHooks = async (
   const dryRun = values["dry-run"] === true;
   const root = repositoryRoot(resolve(values.repo ?? process.cwd()));
   const sessionTrailer = values["session-trailer"] === true;
-  if (sessionTrailer) {
-    const superproject = await git(root, [
-      "rev-parse",
-      "--show-superproject-working-tree",
-    ]);
-    if (
-      (await isNeuveRepository(root)) ||
-      (superproject !== "" && (await isNeuveRepository(superproject)))
-    )
-      throw new Error(
-        "The Neuve repository forbids attribution trailers; it links commits through post-commit records only.",
-      );
-  }
   if (values.command !== undefined && !isAbsolute(values.command))
     throw new Error("--command must be an absolute path");
   const argv =
@@ -724,20 +719,11 @@ export const runSetupHooks = async (
   if (Exit.isFailure(located))
     throw new Error(`Cannot resolve the git directory of ${root}`);
   const location = located.value;
-  const hooksPath = await git(root, ["rev-parse", "--git-path", "hooks"]);
-  const hooksDirectory = isAbsolute(hooksPath)
-    ? hooksPath
-    : resolve(root, hooksPath);
-  const hooksFolderIsLink =
-    (await exists(hooksDirectory)) &&
-    (await lstat(hooksDirectory)).isSymbolicLink();
-
-  const hookArgv =
-    values.command !== undefined || compiled()
-      ? [...argv, "hook"]
-      : // Hooks run in the project: bun loads nothing from it (`sourceRunFlags`).
-        [process.execPath, ...Starter.sourceRunFlags(), hookBundlePath()];
-  const command = hookArgv.map(quote).join(" ");
+  const bundle = values.command === undefined && !compiled();
+  const hookArgv = bundle
+    ? // Hooks run in the project: bun loads nothing from it (`sourceRunFlags`).
+      [process.execPath, ...Starter.sourceRunFlags(), hookBundlePath()]
+    : [...argv, "hook"];
 
   // Named, the person's choice. Otherwise the agent programs found here, and every one this
   // repository's capture.json already lists: a program not found adds nothing new and never takes
@@ -798,11 +784,95 @@ export const runSetupHooks = async (
         text: `--${option} names its hook file, but ${name} isn't being set up here, so that file was left alone`,
       });
 
+  const changes = await writeCapture({
+    root,
+    location,
+    config: {
+      version: 1,
+      command: argv,
+      hookCommand: hookArgv,
+      gitHooks: [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])],
+      agents,
+      sessionTrailer,
+    },
+    hooked,
+    hookFiles: (harness) =>
+      values[harness === "claude-code" ? "claude-settings" : "codex-hooks"],
+    dryRun,
+    bundle,
+  });
+  const screen = commandScreen({});
+  await screen.header(`neuve setup hooks ${CLI_VERSION}`);
+  const mark: Mark = dryRun ? "skipped" : "done";
+  await screen.step(
+    mark,
+    "Capture",
+    `${dryRun ? "dry run: would enable" : "enabled"} in ${shown(root)}; hooks run ${shellCommand(hookArgv)}`,
+  );
+  await screen.detail(
+    changes.map((change) => `${change.path}: ${change.action}`),
+  );
+  for (const line of notFound)
+    await screen.step(line.mark, line.label, line.text);
+  if (hooked.includes("codex")) await screen.detail([CODEX_HOOK_TRUST]);
+  // Stack sources (11.15): their own lines, so what is fetched and its caps are named.
+  const [first = "", ...rest] = await setupStack({
+    root,
+    dryRun,
+    ...(values["no-stack"] === true ? { off: "--no-stack" as const } : {}),
+    ...(options.stackStore === undefined
+      ? {}
+      : { storeRoot: options.stackStore }),
+  });
+  await screen.step(mark, "Stack sources", first);
+  await screen.detail(rest.map((line) => line.trim()));
+  return 0;
+};
+
+const writeCapture = async ({
+  root,
+  location,
+  config,
+  hooked,
+  hookFiles,
+  dryRun = false,
+  bundle = false,
+}: {
+  root: string;
+  location: StoreLocation;
+  config: CaptureConfig;
+  hooked: ReadonlyArray<AgentHarness>;
+  hookFiles?: (harness: AgentHarness) => string | undefined;
+  dryRun?: boolean;
+  bundle?: boolean;
+}): Promise<ReadonlyArray<Change>> => {
+  const { gitHooks } = config;
+  if (config.sessionTrailer || gitHooks.includes(TRAILER_HOOK)) {
+    const superproject = await git(root, [
+      "rev-parse",
+      "--show-superproject-working-tree",
+    ]);
+    if (
+      (await isNeuveRepository(root)) ||
+      (superproject !== "" && (await isNeuveRepository(superproject)))
+    )
+      throw new Error(
+        "The Neuve repository forbids attribution trailers; it links commits through post-commit records only.",
+      );
+  }
+  const command = shellCommand(config.hookCommand);
+  const hooksPath = await git(root, ["rev-parse", "--git-path", "hooks"]);
+  const hooksDirectory = isAbsolute(hooksPath)
+    ? hooksPath
+    : resolve(root, hooksPath);
+  const hooksFolderIsLink = (
+    await lstat(hooksDirectory).catch(() => undefined)
+  )?.isSymbolicLink();
   const files = await Promise.all(
     hooked.map(async (harness) => {
       const option =
         harness === "claude-code" ? "claude-settings" : "codex-hooks";
-      const namedPath = values[option];
+      const namedPath = hookFiles?.(harness);
       const path = resolve(namedPath ?? defaultHookFile(harness));
       // A linked hook file is written at its target, so the target's folder is the one checked.
       const target = await linkTarget(path).catch(() => path);
@@ -817,14 +887,18 @@ export const runSetupHooks = async (
       : error;
   // Every Git hook and hook file is checked before anything is written, so each one that can't be
   // changed is named together, and nothing is written when one is refused.
-  const gitHooks = [...GIT_HOOKS, ...(sessionTrailer ? [TRAILER_HOOK] : [])];
+  const configPath = captureConfigPath(location);
+  const configChanged =
+    JSON.stringify(config) !==
+    JSON.stringify(await readCaptureConfig(location));
   const failures: unknown[] = [];
   // Every other place setup writes is checked the same way: the capture settings, and the shared hook
   // program when this run builds it.
   if (
+    configChanged &&
     !dryRun &&
     (!(await writableFolder(location.directory)) ||
-      !(await writableFile(captureConfigPath(location))))
+      !(await writableFile(configPath)))
   )
     failures.push(
       new Error(
@@ -832,9 +906,7 @@ export const runSetupHooks = async (
       ),
     );
   if (
-    hookArgv.at(-1) === hookBundlePath() &&
-    !compiled() &&
-    values.command === undefined &&
+    bundle &&
     !dryRun &&
     (!(await writableFolder(dirname(hookBundlePath()))) ||
       !(await writableFile(hookBundlePath())))
@@ -871,27 +943,12 @@ export const runSetupHooks = async (
         .join("\n"),
     );
   // Built only once nothing is refused: every repository on this machine runs this program.
-  if (
-    hookArgv.at(-1) === hookBundlePath() &&
-    !compiled() &&
-    values.command === undefined &&
-    !dryRun
-  )
-    await buildHookBundle();
+  if (bundle && !dryRun) await buildHookBundle();
   const changes: Array<Change> = [];
   for (const name of gitHooks)
     changes.push(await installGitHook(hooksDirectory, name, command, dryRun));
 
-  const config: CaptureConfig = {
-    version: 1,
-    command: argv,
-    hookCommand: hookArgv,
-    gitHooks,
-    agents,
-    sessionTrailer,
-  };
-  const configPath = captureConfigPath(location);
-  if (!dryRun) {
+  if (configChanged && !dryRun) {
     await mkdir(location.directory, {
       recursive: true,
       mode: STORE_DIRECTORY_MODE,
@@ -900,7 +957,7 @@ export const runSetupHooks = async (
   }
   changes.push({
     path: configPath,
-    action: dryRun ? "would write" : "written",
+    action: !configChanged ? "unchanged" : dryRun ? "would write" : "written",
   });
 
   for (const file of files)
@@ -912,35 +969,7 @@ export const runSetupHooks = async (
       ),
     );
 
-  const screen = commandScreen({});
-  await screen.header(`neuve setup hooks ${CLI_VERSION}`);
-  const mark: Mark = dryRun ? "skipped" : "done";
-  await screen.step(
-    mark,
-    "Capture",
-    `${dryRun ? "dry run: would enable" : "enabled"} in ${shown(root)}; hooks run ${command}`,
-  );
-  await screen.detail(
-    changes.map((change) => `${change.path}: ${change.action}`),
-  );
-  for (const line of notFound)
-    await screen.step(line.mark, line.label, line.text);
-  if (hooked.includes("codex"))
-    await screen.detail([
-      "Codex asks you to review and trust new hooks the next time it starts.",
-    ]);
-  // Stack sources (11.15): their own lines, so what is fetched and its caps are named.
-  const [first = "", ...rest] = await setupStack({
-    root,
-    dryRun,
-    ...(values["no-stack"] === true ? { off: "--no-stack" as const } : {}),
-    ...(options.stackStore === undefined
-      ? {}
-      : { storeRoot: options.stackStore }),
-  });
-  await screen.step(mark, "Stack sources", first);
-  await screen.detail(rest.map((line) => line.trim()));
-  return 0;
+  return changes;
 };
 
 /** Each agent's hook file, where `setup hooks` writes it unless told otherwise. */
@@ -1033,8 +1062,8 @@ const present = async ({ path, use }: Needed) => {
  * without writing: its capture.json and Git hooks, and Neuve's entries in the person's agent hook
  * files. Those entries are per user, shared by every repository, so they are judged on what holds
  * for all of them: an entry whose program is gone or can't run needs an update wherever it is seen,
- * even from a repository with no capture; a listed agent with no Neuve entries is missing. Which
- * live copy an entry calls is not judged, since another repository may have set it up with another.
+ * even from a repository with no capture; a listed agent with no Neuve entries is missing.
+ * A compiled Neuve also expects its own command. A source run accepts any working install.
  * `configured` is false when this repository has no capture.json.
  */
 export const inspectCapture = async (
@@ -1052,11 +1081,40 @@ export const inspectCapture = async (
   const located = await Effect.runPromiseExit(resolveStoreLocation(root));
   if (Exit.isFailure(located)) return undefined;
   const location = located.value;
-  const configPath = captureConfigPath(location);
   const config = await readCaptureConfig(location);
+  const parts = await inspectCaptureParts({
+    root,
+    location,
+    config,
+    hookFiles,
+    harnesses: Identity.AGENT_HARNESSES,
+    found,
+    prefix: compiled()
+      ? shellCommand([...Starter.currentCliCommand(), "hook"])
+      : undefined,
+  });
+  return { configured: config !== undefined, parts };
+};
+
+const inspectCaptureParts = async ({
+  root,
+  location,
+  config,
+  hookFiles,
+  harnesses,
+  found,
+  prefix,
+}: {
+  root: string;
+  location: StoreLocation;
+  config: CaptureConfig | undefined;
+  hookFiles: (harness: AgentHarness) => string;
+  harnesses: ReadonlyArray<AgentHarness>;
+  found?: ReadonlyArray<AgentHarness> | undefined;
+  prefix: string | undefined;
+}): Promise<ReadonlyArray<CapturePart>> => {
+  const configPath = captureConfigPath(location);
   const parts: CapturePart[] = [];
-  let command: string | undefined;
-  let dead = false;
   if (config === undefined) {
     if (await exists(configPath))
       parts.push({
@@ -1065,22 +1123,23 @@ export const inspectCapture = async (
         why: "it isn't a capture.json this neuve can read",
       });
   } else {
-    command = config.hookCommand.map(quote).join(" ");
+    const recorded = shellCommand(config.hookCommand);
     // The program, and for a hook from a source checkout the bundled script `bun` runs.
     const needed = neededBy(config.hookCommand);
     const missing: string[] = [];
     for (const file of needed)
       if (!(await present(file))) missing.push(file.path);
     const program = missing.join(", ");
-    dead = missing.length > 0;
+    const dead = missing.length > 0;
+    const why = dead
+      ? `its hooks run ${program}, which isn't there or can't run`
+      : prefix !== undefined && recorded !== prefix
+        ? `its hooks use a different Neuve install (${recorded})`
+        : undefined;
     parts.push(
-      dead
-        ? {
-            path: configPath,
-            state: "update",
-            why: `its hooks run ${program}, which isn't there or can't run`,
-          }
-        : { path: configPath, state: "ok" },
+      why === undefined
+        ? { path: configPath, state: "ok" }
+        : { path: configPath, state: "update", why },
     );
     const hooksPath = await git(root, [
       "rev-parse",
@@ -1105,9 +1164,13 @@ export const inspectCapture = async (
     else
       for (const name of hooksDirectory === undefined ? [] : config.gitHooks) {
         const path = join(hooksDirectory!, name);
-        const judged = await judgeGitHook(hooksDirectory!, name, command);
+        const judged = await judgeGitHook(
+          hooksDirectory!,
+          name,
+          prefix ?? recorded,
+        );
         parts.push(
-          judged.state === "ok" && dead
+          judged.state === "ok" && dead && (prefix ?? recorded) === recorded
             ? {
                 path,
                 state: "update",
@@ -1119,7 +1182,7 @@ export const inspectCapture = async (
         );
       }
   }
-  for (const harness of Identity.AGENT_HARNESSES) {
+  for (const harness of harnesses) {
     const path = hookFiles(harness);
     const read = await readHookFile(path);
     if (read.kind === "unreadable") {
@@ -1132,7 +1195,7 @@ export const inspectCapture = async (
     }
     const judged =
       read.kind === "read"
-        ? await judgeAgentHooks(read.file, harness)
+        ? await judgeAgentHooks(read.file, harness, prefix)
         : ({ state: "missing" } as const);
     // setup hooks writes nothing for a program not found here, so nothing of its own is to fix.
     const absent = found !== undefined && !found.includes(harness);
@@ -1151,22 +1214,89 @@ export const inspectCapture = async (
                 why: `capture.json lists ${harness}, which isn't found here, so it has no hooks until neuve setup hooks finds it`,
               },
         );
-    } else if (judged.state === "update")
+      continue;
+    }
+    const why =
+      judged.state === "update"
+        ? judged.why
+        : prefix !== undefined && !judged.sameInstall
+          ? `Neuve's ${harness} hooks use a different Neuve install`
+          : undefined;
+    if (why !== undefined)
       parts.push(
         absent
           ? {
               path,
               state: "ok",
-              why: `Neuve's ${harness} hooks here are out of date (${judged.why}), but ${harness} isn't found here, so they are left as they are until neuve setup hooks finds it`,
+              why: `Neuve's ${harness} hooks here are out of date (${why}), but ${harness} isn't found here, so they are left as they are until neuve setup hooks finds it`,
             }
-          : { path, state: "update", why: judged.why },
+          : { path, state: "update", why },
       );
-    else
+    else if (judged.state === "ok")
       parts.push({
         path,
         state: "ok",
         ...(judged.note === undefined ? {} : { why: judged.note }),
       });
   }
-  return { configured: config !== undefined, parts };
+  return parts;
+};
+
+/** Setup and upgrade repair only capture that the repository already opted into. */
+export const repairCapture = async (
+  root: string,
+  screen: Screen,
+  foundPrograms?: () => Promise<ReadonlyArray<AgentHarness>>,
+) => {
+  if (!compiled()) return;
+  const located = await Effect.runPromiseExit(resolveStoreLocation(root));
+  if (Exit.isFailure(located))
+    throw new Error(`Cannot resolve the git directory of ${root}`);
+  const location = located.value;
+  const config = await readCaptureConfig(location);
+  if (config === undefined && !(await exists(captureConfigPath(location))))
+    return;
+  if (
+    config === undefined ||
+    config.gitHooks.some(
+      (name) => ![...GIT_HOOKS, TRAILER_HOOK].some((known) => known === name),
+    )
+  )
+    throw new Error(
+      `${shown(captureConfigPath(location))} can't be kept as written. Run neuve setup hooks --repo ${quote(root)} to set capture up again`,
+    );
+
+  const command = [...Starter.currentCliCommand()];
+  const hookCommand = [...command, "hook"];
+  const found = await (foundPrograms?.() ??
+    findAgentPrograms("check", undefined, config.agents).then(foundIds));
+  const hooked = config.agents.filter((agent) => found.includes(agent));
+  const parts = await inspectCaptureParts({
+    root,
+    location,
+    config,
+    hookFiles: defaultHookFile,
+    harnesses: hooked,
+    prefix: shellCommand(hookCommand),
+  });
+  if (parts.every((part) => part.state === "ok")) {
+    await screen.step("done", "Capture", `nothing to do in ${shown(root)}`);
+    return;
+  }
+  const changes = await writeCapture({
+    root,
+    location,
+    config: { ...config, command, hookCommand },
+    hooked,
+  });
+  await screen.step("done", "Capture", `repaired in ${shown(root)}`);
+  await screen.detail(
+    changes.map((change) => `${change.path}: ${change.action}`),
+  );
+  if (
+    changes.some(
+      ({ harness, action }) => harness === "codex" && action !== "unchanged",
+    )
+  )
+    await screen.detail([CODEX_HOOK_TRUST]);
 };
