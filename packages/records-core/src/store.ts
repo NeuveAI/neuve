@@ -77,9 +77,11 @@ const isReadOnly = (error: SqlError) => {
 const ensureWal = (filename: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient;
-    // Takes effect only in a database that has no tables yet: a new store returns the space that
-    // pruning frees (proposal §7). A store created earlier keeps its mode, and freed pages are reused.
-    yield* sql.unsafe("PRAGMA auto_vacuum = INCREMENTAL");
+    const schema = yield* sql`SELECT 1 FROM sqlite_schema LIMIT 1`;
+    // Reapplying this takes a write lock, so enable space reclamation only for new stores.
+    if (schema.length === 0) {
+      yield* sql.unsafe("PRAGMA auto_vacuum = INCREMENTAL");
+    }
     yield* sql.unsafe("PRAGMA journal_mode = WAL").pipe(
       Effect.retry({
         while: isLockContention,

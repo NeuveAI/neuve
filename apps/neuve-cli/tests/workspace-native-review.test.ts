@@ -1,6 +1,7 @@
 import { RunLog } from "@neuve/harness";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReviewFeedSnapshotSchema } from "@ace/host/review-protocol";
+import { Database } from "bun:sqlite";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import {
   mkdtempSync,
@@ -1263,6 +1264,31 @@ test("concurrent replay of one admission recovers the same Records identity", as
   expect(a.admission?.recovered).toBe(false);
   expect(b.admission?.recovered).toBe(true);
 });
+
+test("the review feed reads the committed snapshot while Records has a writer", async () => {
+  const intent = { ...newIntent(46), notify: false };
+  const admitted = requireReview(
+    await callbacks.reviewSubmit(intent, async () => {}),
+  );
+  const { database } = await execute(resolveStoreLocation(root));
+  using writer = new Database(database);
+  writer.exec("BEGIN IMMEDIATE");
+  try {
+    writer
+      .query("UPDATE jobs SET state = 'active' WHERE job_seq = ?")
+      .run(admitted.job);
+
+    const started = performance.now();
+    const snapshot = await readReviewFeedSnapshot(root, "native-fixture", {
+      review: intent.requestId,
+    });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(snapshot.review).toBe(intent.requestId);
+    expect(snapshot.progress).toEqual({ phase: "queued" });
+  } finally {
+    writer.exec("ROLLBACK");
+  }
+}, 15000);
 
 test("a stopped card never exposes raw job error text", async () => {
   const intent = { ...newIntent(45), notify: false };
