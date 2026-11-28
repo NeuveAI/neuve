@@ -123,6 +123,7 @@ test("a Claude Code subprocess inherits its Ace chat", async () => {
       out({
         type: "query.open",
         check: (options) => {
+          expect(options.cwd).toBe(config.cwd);
           expect(options.env).toMatchObject({
             HOME: "/test/home",
             NEUVE_ACE_CHAT: "channel-a/7",
@@ -138,9 +139,60 @@ test("a Claude Code subprocess inherits its Ace chat", async () => {
         yield* session.startTurn(normal);
         yield* reader.until("turn.finished");
       }),
-    { ...policy, environment: { NEUVE_ACE_CHAT: "channel-a/7" } },
+    {
+      ...policy,
+      folder: "/work/chat folder",
+      environment: { NEUVE_ACE_CHAT: "channel-a/7" },
+    },
   );
 });
+
+test.each(["allow", "ask"] as const)(
+  "a carried MCP server sees the chat folder under Claude's %s policy",
+  async (approvalPolicy) => {
+    const server = {
+      type: "stdio" as const,
+      command: "npx",
+      args: ["--autoConnect"],
+    };
+    await sessionTest(
+      [
+        out({
+          type: "query.open",
+          check: (options) => {
+            expect(options).toMatchObject({
+              cwd: "/work/chat folder",
+              settingSources: [],
+              strictMcpConfig: true,
+              settings: { disableAllHooks: true },
+              tools: ["ToolSearch"],
+              mcpServers: { "chrome-devtools": server },
+            });
+            expect(options.allowedTools).toEqual(
+              approvalPolicy === "allow"
+                ? ["ToolSearch", "mcp__chrome-devtools__*"]
+                : ["ToolSearch"],
+            );
+          },
+        }),
+        offer,
+        inbound(result()),
+        close,
+      ],
+      (session, reader) =>
+        Effect.gen(function* () {
+          yield* session.startTurn(normal);
+          yield* reader.until("turn.finished");
+        }),
+      {
+        ...policy,
+        approvalPolicy,
+        folder: "/work/chat folder",
+        mcpServers: { "chrome-devtools": server },
+      },
+    );
+  },
+);
 
 async function finalOutputFormat(
   outputSchema: NonNullable<SessionPolicy["outputSchema"]>,

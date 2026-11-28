@@ -3,6 +3,7 @@ import { sharedWorkEffect } from "@neuve/records-core/shared-work-effect"
 import { statSync } from "node:fs"
 import { resolve } from "node:path"
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem"
+import { getRequest } from "@tanstack/react-start/server"
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect"
 import type { FileSystem } from "effect/FileSystem"
 import type { SqlClient } from "effect/sql/SqlClient"
@@ -54,6 +55,14 @@ const failureMessage = (error: unknown): string => {
 }
 
 type Mode = "read" | "write" | "create"
+
+const requestSignal = (): AbortSignal | undefined => {
+  try {
+    return getRequest().signal
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Where each repository's store lives, resolved once per process: the git common directory does not
@@ -127,12 +136,15 @@ const run = async <TResult>(
     Effect.provide(BunFileSystem.layer),
     Effect.withSpan(name, { attributes: { "neuve.records.mode": mode } })
   )
-  const exit = await Effect.runPromiseExit(effect)
+  const signal = mode === "read" ? requestSignal() : undefined
+  const exit = await Effect.runPromiseExit(effect, { signal })
   if (Exit.isSuccess(exit)) {
     // Committed: the desk hears its own commands without waiting on the file system.
     if (mode !== "read") notifyRecordsChanged()
     return exit.value
   }
+  if (signal?.aborted && Cause.hasInterruptsOnly(exit.cause))
+    throw signal.reason
   const failure = Cause.findErrorOption(exit.cause)
   if (Option.isSome(failure)) {
     const error = failure.value as { _tag?: string }

@@ -72,6 +72,7 @@ export function childEnvironment(
   return {
     ...env,
     ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    ENABLE_TOOL_SEARCH: "true",
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     CLAUDE_CODE_AUTO_CONNECT_IDE: "0",
     CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: "1",

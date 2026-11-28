@@ -1,7 +1,7 @@
 // The fake checks what crosses the Codex connection and what the session reports to its caller.
 import { describe, expect, test } from "bun:test";
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import {
   AccountRejected,
   AccountName,
@@ -12,7 +12,16 @@ import {
   type SessionPolicy,
   type SessionStart,
 } from "@neuve/runtime";
-import { Effect, Exit, Fiber, Logger, Queue, Scope, Stream } from "effect";
+import {
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Queue,
+  Scope,
+  Stream,
+} from "effect";
 import { launchArguments, turnSettings } from "../src/launch.ts";
 import type { LogEntry } from "../src/log.ts";
 import { openCodexSession, type CodexSignInCheck } from "../src/session.ts";
@@ -101,13 +110,20 @@ function run(
   ) => Effect.Effect<void, unknown>,
   overrides: {
     policy?: SessionPolicy;
+    cwd?: string;
     start?: SessionStart;
     stopWait?: `${number} millis`;
     broken?: ReadonlyArray<string>;
     log?: (entry: LogEntry) => void;
+    warnings?: unknown[];
     checkSignIn?: CodexSignInCheck;
   } = {},
 ) {
+  const { warnings } = overrides;
+  const logger =
+    warnings === undefined
+      ? Layer.empty
+      : Logger.layer([Logger.make(({ message }) => warnings.push(message))]);
   return Effect.runPromise(
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -116,7 +132,7 @@ function run(
         program: "/test/codex",
         codexHome:
           overrides.checkSignIn === undefined ? undefined : "/neuve/codex",
-        cwd: "/work",
+        cwd: overrides.cwd ?? "/work",
         // An inherited Codex home must not reach Codex: the account names its own, or none.
         environment: {
           HOME: "/home",
@@ -141,7 +157,11 @@ function run(
       yield* body(session, read, scope).pipe(
         Effect.ensuring(Scope.close(scope, Exit.void)),
       );
-    }).pipe(Effect.provide(fake.layer), Effect.timeout("3 seconds")),
+    }).pipe(
+      Effect.provide(fake.layer),
+      Effect.provide(logger),
+      Effect.timeout("3 seconds"),
+    ),
   );
 }
 
@@ -831,9 +851,9 @@ describe("the mode table", () => {
         expect(clean.args).toContain("mcp_servers.own-server.enabled=false");
         expect(clean.args).toContain("plugins.own-plugin.enabled=false");
         expect(clean.args).toContain("apps.own-app.enabled=false");
-        expect(clean.args.join(" ")).toContain(
-          '{path="/home/.codex/skills/own-skill/SKILL.md",enabled=false}',
-        );
+        const flags =
+          'skills.config=[{path="/home/.codex/skills/own-skill/SKILL.md",enabled=false},{path="/work/.agents/skills/repo-skill/SKILL.md",enabled=false}]';
+        expect(clean.args).toContain(flags);
         yield* startOn(fake, session, readOnly);
         expect(fake.processes).toHaveLength(2);
         expect(written(clean, "turn/start")[0]!.params).toMatchObject({
@@ -847,6 +867,10 @@ describe("the mode table", () => {
         expect(fake.processes).toHaveLength(3);
         const own = fake.current();
         expect(own.clean).toBe(false);
+        expect(own.args).toContain(flags);
+        expect(
+          fake.processes.flatMap((p) => written(p, "plugin/reconcile")),
+        ).toEqual([]);
         expect(clean.io.exited()).toBe(true);
         expect(written(own, "thread/resume")[0]!.params).toMatchObject({
           threadId: "thread-1",
@@ -865,6 +889,121 @@ describe("the mode table", () => {
         expect(read.finished()).toHaveLength(1);
       }),
     );
+  });
+
+  test("carried stdio servers keep distinct aliases after name normalization", () => {
+    const args = launchArguments(
+      "own",
+      { mcpServers: [], plugins: [], apps: [], exclude: [], skills: [] },
+      undefined,
+      undefined,
+      undefined,
+      {
+        "foo-bar": { type: "stdio", command: "first" },
+        foo_bar: { type: "stdio", command: "second" },
+        "foo.bar": {
+          type: "stdio",
+          command: "third",
+          env: { "FEATURE.MODE": "debug", FEATURE_MODE: "normal" },
+        },
+      },
+    );
+    expect(
+      args.filter(
+        (arg) =>
+          arg.startsWith("mcp_servers.") &&
+          (arg.includes(".command=") || arg.includes(".env")),
+      ),
+    ).toEqual([
+      'mcp_servers.neuve_foo_bar.command="first"',
+      'mcp_servers.neuve_foo_bar_2.command="second"',
+      'mcp_servers.neuve_foo_bar_3.command="third"',
+      'mcp_servers.neuve_foo_bar_3.env={"FEATURE.MODE"="debug","FEATURE_MODE"="normal"}',
+    ]);
+  });
+
+  test("carried stdio servers start with their own arguments in the write process", async () => {
+    const fake = codex();
+    const server = {
+      type: "stdio",
+      command: "npx",
+      args: ["--autoConnect", "--workspace=/work"],
+      env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
+    } as const;
+    const scoped = {
+      ...policy,
+      mcpServers: {
+        "chrome-devtools": { ...server, args: [...server.args] },
+        plain: {
+          type: "stdio" as const,
+          command: "plain-server",
+          args: ["--identify"],
+        },
+      },
+    };
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          expect(
+            fake.processes.every(
+              ({ args }) =>
+                !args.some((arg) => arg.includes("neuve_chrome_devtools")),
+            ),
+          ).toBe(true);
+          yield* startOn(fake, session, write);
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.command="npx"',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_plain.args=["--identify"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
+          );
+          expect(fake.current().args).not.toContain(
+            "mcp_servers.own-server.enabled=false",
+          );
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          yield* startOn(fake, session, readOnly);
+          expect(
+            fake
+              .current()
+              .args.some((arg) => arg.includes("neuve_chrome_devtools")),
+          ).toBe(false);
+        }),
+      { policy: scoped },
+    );
+    const personal = {
+      mcpServers: ["chrome_devtools", "neuve_chrome_devtools"],
+      plugins: [],
+      apps: [],
+      exclude: [],
+      skills: [],
+    };
+    const args = launchArguments(
+      "own",
+      personal,
+      undefined,
+      undefined,
+      undefined,
+      scoped.mcpServers,
+    );
+    expect(
+      args.filter((arg) => arg.startsWith("mcp_servers.neuve_chrome_devtools")),
+    ).toEqual([
+      'mcp_servers.neuve_chrome_devtools_2.command="npx"',
+      'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
+      'mcp_servers.neuve_chrome_devtools_2.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
+      'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
+    ]);
   });
 
   test("a turn without its folder and access is refused before it starts", async () => {
@@ -1800,7 +1939,7 @@ describe("what the first tests missed", () => {
     [
       "a skill of the person's enabled",
       (m: Record<string, unknown>, p: Process) =>
-        m.method === "skills/list" && fake0.processes.length > 1
+        m.method === "skills/list" && p.clean && fake0.processes.length > 1
           ? {
               data: [
                 {
@@ -1844,33 +1983,6 @@ describe("what the first tests missed", () => {
     expect(turnSettings(write, "ask").approvalPolicy).toBe("on-request");
     expect(turnSettings(readOnly, "ask").approvalPolicy).toBe("never");
   });
-
-  test.each(["own", "clean"] as const)(
-    "%s Codex allows the selected skill path and disables its same-name copy",
-    (configuration) => {
-      const args = launchArguments(
-        configuration,
-        {
-          mcpServers: [],
-          plugins: [],
-          apps: [],
-          exclude: [],
-          skills: [
-            { path: "/home/.agents/skills/neuve/SKILL.md", enabled: true },
-            { path: "/carried skills/neuve/SKILL.md", enabled: false },
-          ],
-        },
-        undefined,
-      );
-      expect(args).toContain(
-        'skills.config=[{path="/home/.agents/skills/neuve/SKILL.md",enabled=true},{path="/carried skills/neuve/SKILL.md",enabled=false}]',
-      );
-      expect(args).toContain("skills.bundled.enabled=false");
-      expect(args.includes("features.hooks=false")).toBe(
-        configuration === "clean",
-      );
-    },
-  );
 
   test.each([
     { label: "a different spelling of an allowed skill", enabled: true },
@@ -1928,6 +2040,189 @@ describe("what the first tests missed", () => {
     expect(fake.current().args).toContain(flag);
     expect(logs).toEqual(
       enabled ? [] : [["codex: skills were not enabled", ["neuve"]]],
+    );
+  });
+
+  test.each([
+    {
+      reason: "write skills keep the highest-precedence path for each name",
+      disablesShared: false,
+    },
+    {
+      reason:
+        "write skills keep the next enabled copy when the person's copy is off",
+      disablesShared: true,
+    },
+  ])("$reason", async ({ disablesShared }) => {
+    const cwd = await mkdtemp(resolve(import.meta.dir, ".skill-roots-"));
+    try {
+      const entries = [
+        "carried skills/shared",
+        ".agents/skills/shared",
+        "person/.codex/skills/shared",
+        "carried skills/project",
+        ".codex/skills/project",
+        "person/.agents/skills/personal",
+        "person/.codex/skills/personal",
+      ].map((folder) => ({
+        folder,
+        name: basename(folder),
+        path: resolve(cwd, folder, "SKILL.md"),
+      }));
+      await Promise.all(
+        entries.map(({ path, name }) =>
+          Bun.write(path, `---\nname: ${name}\ndescription: fixture\n---\n`),
+        ),
+      );
+      const reported = (process: Process) => {
+        const flags = process.args.find((arg) =>
+          arg.startsWith("skills.config="),
+        );
+        return entries.map((skill) => {
+          const initiallyEnabled =
+            skill.folder !== "person/.agents/skills/personal" &&
+            !(disablesShared && skill.folder === "person/.codex/skills/shared");
+          const changed = flags?.includes(
+            `{path=${JSON.stringify(skill.path)},enabled=${!initiallyEnabled}}`,
+          );
+          return {
+            ...skill,
+            scope: "user",
+            enabled: changed ? !initiallyEnabled : initiallyEnabled,
+          };
+        });
+      };
+      const fake = codex((message, process) =>
+        message.method === "skills/list"
+          ? { data: [{ skills: reported(process) }] }
+          : undefined,
+      );
+      const enabled = (process: Process) =>
+        reported(process)
+          .filter((skill) => skill.enabled)
+          .map((skill) => skill.folder);
+      await run(
+        fake,
+        (session, read) =>
+          Effect.gen(function* () {
+            expect(enabled(fake.current())).toEqual([
+              ".agents/skills/shared",
+              "carried skills/project",
+              "person/.agents/skills/personal",
+            ]);
+            yield* session.startTurn({
+              turnId: "write",
+              message: "go",
+              workspace: { folder: cwd, access: "write" },
+            });
+            const own = fake.current();
+            expect(enabled(own)).toEqual([
+              disablesShared
+                ? ".agents/skills/shared"
+                : "person/.codex/skills/shared",
+              ".codex/skills/project",
+              "person/.codex/skills/personal",
+            ]);
+            fake.send("turn/completed", completed("completed"));
+            expect(yield* read.next("turn.finished")).toMatchObject({
+              turnId: "write",
+              outcome: { status: "completed" },
+            });
+            expect(
+              own.io.written
+                .map(({ method }) => method)
+                .filter(
+                  (method) =>
+                    method === "plugin/reconcile" || method === "thread/resume",
+                ),
+            ).toEqual(["plugin/reconcile", "thread/resume"]);
+            expect(
+              fake.processes.map((p) => written(p, "plugin/reconcile").length),
+            ).toEqual([0, 0, 1]);
+          }),
+        {
+          cwd,
+          policy: {
+            ...policy,
+            environment: { HOME: resolve(cwd, "person") },
+            skillRoots: {
+              user: resolve(cwd, "person/.agents/skills"),
+              project: resolve(cwd, ".agents/skills"),
+              carried: resolve(cwd, "carried skills"),
+            },
+          },
+        },
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    {
+      reason: "write startup waits for the plugin sync reply",
+      outcome: "success",
+    },
+    {
+      reason: "write startup warns and continues after a plugin sync failure",
+      outcome: "error",
+    },
+    {
+      reason:
+        "write startup warns and continues when plugin sync never replies",
+      outcome: "timeout",
+    },
+  ])("$reason", async ({ outcome }) => {
+    const logs: LogEntry[] = [];
+    const warnings: unknown[] = [];
+    let replied = false;
+    const fake = codex((message, process) => {
+      if (message.method === "config/read")
+        return {
+          config: { mcp_servers: { "dotted.name": { enabled: true } } },
+        };
+      if (message.method === "thread/start")
+        return written(process, "plugin/reconcile").length === 1 &&
+          (outcome !== "success" || replied)
+          ? { thread: { id: "thread-after-sync" }, model: "gpt-test" }
+          : new Error("thread started before plugin sync");
+      if (message.method !== "plugin/reconcile") return;
+      if (outcome === "error") return new Error("sync failed");
+      if (outcome === "success")
+        setTimeout(() => {
+          replied = true;
+          process.io.send({
+            id: message.id,
+            result: {
+              changedPlugins: [{ id: "private-plugin" }],
+              failedRemotePluginIds: [],
+            },
+          });
+        }, 30);
+      return SILENT;
+    });
+    await run(
+      fake,
+      (session) =>
+        Effect.sync(() =>
+          expect(session.nativeSessionId).toBe("thread-after-sync"),
+        ),
+      {
+        policy: {
+          ...policy,
+          skillRoots: {
+            user: "/home/.agents/skills",
+            project: "/work/.agents/skills",
+            carried: undefined,
+          },
+        },
+        log: (entry) => logs.push(entry),
+        warnings,
+      },
+    );
+    expect(JSON.stringify(logs)).not.toContain("private-plugin");
+    expect(warnings).toEqual(
+      outcome === "success" ? [] : [["codex: plugin sync failed or timed out"]],
     );
   });
 

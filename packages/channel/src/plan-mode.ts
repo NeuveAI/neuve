@@ -1,5 +1,6 @@
 import type { Context } from "@earendil-works/chord";
 import { getCurrentTools, type Models, type SystemMessage } from "@earendil-works/pi-ai";
+import type { SessionPolicy } from "@neuve/runtime";
 import {
 	defineDoc,
 	defineExtension,
@@ -116,41 +117,63 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 	return { chat, previous: "plan", mode: "ace", approval: { ...approval } };
 }
 
-// The bridge consumes this transient marker before its request becomes a runtime turn.
+// The bridge strips marked tool offers from the transcript. A true value denotes Plan mode.
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
+const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
+const deferredPluginTools = Symbol.for("neuve.chat.deferred-plugin-tools");
 const requestMode = "neuve.chat.request-mode";
 
+export type PluginOffers = {
+	httpTools(): ReadonlySet<string>;
+	deferredTools?(): ReadonlySet<string>;
+	nativeServers?(folder?: string): SessionPolicy["mcpServers"];
+	nativeTool?(name: string): boolean;
+};
+
 /** Pi can commit a streamed partial instead of calling afterResponse when a run is interrupted. */
-export function planModeModels(models: Models, receivesAttendance: (provider: string) => boolean, httpTools?: () => ReadonlySet<string>): Models {
+export function planModeModels(
+	models: Models, receivesAttendance: (provider: string) => boolean,
+	plugins?: PluginOffers,
+): Models {
 	const streamSimple: Models["streamSimple"] = (model, request, options) => {
 		const decision = request.messages.findLast(message =>
 			message.role === "system" && message.sections?.[requestMode] !== undefined);
 		const mode = decision?.role === "system" && decision.sections?.[requestMode];
 		if (mode !== "ace" && mode !== "plan") throw new Error("Pi's model request is missing the chat mode.");
 		const keepAttendance = receivesAttendance(model.provider);
+		const attendance = request.messages.findLast(message =>
+			message.role === "system" && Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION));
+		const attended = attendance?.role === "system" && attendance.sections?.[ATTENDED_SECTION] === "true";
 		const messages = request.messages.filter(message => message !== decision && (
 			keepAttendance || message.role !== "system" || !Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION)
 		)).map(message =>
 			mode === "ace" && message.role === "system" && message.toolsAdded
-				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL) }
+				? { ...message, toolsAdded: message.toolsAdded.filter(tool => tool.name !== PLAN_COMMENT_TOOL && tool.name !== PLAN_TOOL) }
 				: message);
-		if (mode === "plan") {
+		if (mode === "plan" || ((attended || keepAttendance) && plugins?.nativeTool)) {
 			// Add the marker after all request hooks, which may copy the transcript.
 			const tools = getCurrentTools(messages);
 			const offer: SystemMessage = {
 				role: "system",
-				content: tools.some(tool => tool.name === PLAN_TOOL)
+				content: mode === "plan" && tools.some(tool => tool.name === PLAN_TOOL)
 					? `When ready, deliver the full plan or revision in one \`${PLAN_TOOL}\` call on its own. That ends the turn.`
 					: "",
 				timestamp: messages.at(-1)?.timestamp ?? 0,
-				toolsRemoved: tools.filter(tool => !planTools.has(tool.name)).map(({ name }) => ({ name })),
+				toolsRemoved: tools.filter(tool => mode === "plan" ? !planTools.has(tool.name) : plugins?.nativeTool?.(tool.name))
+					.map(({ name }) => ({ name })),
 			};
-			Object.defineProperty(offer, planningRequest, { value: true });
-			messages.push(offer);
+			Object.defineProperty(offer, planningRequest, { value: mode === "plan" });
+			if (mode === "plan" || offer.toolsRemoved?.length) messages.push(offer);
 		}
-		const pluginTools = mode === "ace" ? httpTools?.() : undefined;
-		const streamOptions = pluginTools?.size ? { ...options, [sandboxPluginTools]: pluginTools } : options;
+		const streamOptions = mode === "ace" && plugins && model.api === "neuve-runtime"
+			? {
+				...options,
+				[sandboxPluginTools]: plugins.httpTools(),
+				[deferredPluginTools]: plugins.deferredTools?.(),
+				[nativePluginServers]: keepAttendance ? plugins.nativeServers : undefined,
+			}
+			: options;
 		const stream = models.streamSimple(model, { ...request, messages }, streamOptions);
 		return new Proxy(stream, {
 			get(target, property) {

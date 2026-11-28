@@ -172,7 +172,7 @@ async function exit(kill: boolean, reason: string) {
 	rmSync(paths.socket, { force: true });
 	rmSync(paths.pid, { force: true });
 	for (const client of clients) client.destroy();
-	process.exit(errors.length ? 1 : 0);
+	process.exit(errors.length || reason === "resume-failed" ? 1 : 0);
 }
 
 function serve(socket: Socket) {
@@ -236,6 +236,7 @@ function serve(socket: Socket) {
 
 const server = createServer(serve);
 server.listen(paths.socket);
+void channel.recovered?.catch(() => exit(false, "resume-failed"));
 
 // Dormant channels are files, not processes: retire once nobody is attached and no work is live.
 setInterval(async () => {

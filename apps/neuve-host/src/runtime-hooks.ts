@@ -14,7 +14,6 @@ export type RuntimeHooks = {
 	listening?(port: number): void;
 	command?(args: readonly string[]): Promise<number | undefined>;
 	onFork?(source: string, fork: string): Promise<void>;
-	forkLane?(project: string, branch: string, base: string, id: string, lane: string): Promise<string>;
 };
 let hooks: Readonly<RuntimeHooks> = Object.freeze({});
 export function configureRuntime(value: RuntimeHooks): void { hooks = Object.freeze({...hooks, ...value}); }

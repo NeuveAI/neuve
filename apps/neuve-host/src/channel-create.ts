@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import type { GitCommand } from "@ace/channel/git";
 import * as catalog from "./catalog";
 import { config, inside } from "./host-config";
 import {git} from "./projects";
 import type {LaneAssignment} from "./extension-protocol";
 const FIRST_LANE = "work";
 const NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
-async function output(dir: string, args: string[]): Promise<string> {
+async function output(dir: string, args: GitCommand): Promise<string> {
 	const result = await git(dir, args);
 	if (result.status !== 0) {
 		throw new Error((result.stderr || result.stdout).trim() || `git ${args[0]} failed`);
@@ -32,7 +33,7 @@ async function base(dir: string, revision: string): Promise<string> {
 /**
  * The root chat's lane for a new channel: the worktree `requested` names, once it proves to be a
  * worktree of the project's repository outside the checkout, or else a new `work` lane the host
- * creates from the project's HEAD, as the lane tool would.
+ * creates from the project's HEAD.
  */
 export async function lane(
 	record: catalog.Listing,
@@ -78,13 +79,8 @@ export async function lane(
 /** Neuve's coding isolation policy is composed after ordinary native channel admission. */
 export async function assign(record: catalog.Listing, requested?: LaneAssignment): Promise<catalog.Listing> {
 	try {
-		const refs = await output(record.project, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"]);
-		const taken = new Set(refs.split("\n").map((name) => name.split("/")[0]));
-		let prefix = record.prefix;
-		for (let index = 2; taken.has(prefix); index++) prefix = `${record.prefix}-${index}`;
-		const current = {...record, prefix};
-		const assigned = await lane(current, requested);
-		catalog.write({...current, lane: assigned});
+		const assigned = await lane(record, requested);
+		catalog.write({...record, lane: assigned});
 		return catalog.read(record.id);
 	} catch (error) {
 		catalog.remove(record.id);

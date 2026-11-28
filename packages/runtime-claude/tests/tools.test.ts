@@ -1,3 +1,4 @@
+// Check MCP wire metadata and the PreToolUse stamp for both core and deferred tools.
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -37,7 +38,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
   const ids: string[] = [];
   let faults = 0;
   const server = toolServer(
-    [definition],
+    [definition, { ...definition, name: "plugin_read", deferred: true }],
     async (tool, input, id) => {
       ids.push(id);
       const outcome = await Effect.runPromise(tool.handle(input));
@@ -50,7 +51,8 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
       faults++;
     },
   );
-  expect(server).toMatchObject({ alwaysLoad: true, timeout: 2147483647 });
+  expect(server).toMatchObject({ timeout: 2147483647 });
+  expect(server).not.toHaveProperty("alwaysLoad");
   const client = new Client({ name: "fixture", version: "1" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -64,12 +66,13 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
       content: [
         {
           type: "text",
-          text: `Neuve has no tool "missing". This chat's tools are: read.`,
+          text: `Neuve has no tool "missing". This chat's tools are: read, plugin_read.`,
         },
       ],
     });
     expect(faults).toBe(0);
-    expect((await client.listTools()).tools).toMatchObject([
+    const listed = (await client.listTools()).tools;
+    expect(listed).toMatchObject([
       {
         inputSchema: definition.inputSchema,
         _meta: {
@@ -77,7 +80,9 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
           "anthropic/alwaysLoad": true,
         },
       },
+      { name: "plugin_read", inputSchema: definition.inputSchema },
     ]);
+    expect(listed[1]?._meta).not.toHaveProperty("anthropic/alwaysLoad");
     const results = await Promise.all([
       client.callTool({
         name: "read",
@@ -85,7 +90,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
         _meta: { [TOOL_USE_ID_META]: "direct" },
       }),
       client.callTool({
-        name: "read",
+        name: "plugin_read",
         arguments: await stamped("fallback"),
       }),
     ]);
@@ -115,7 +120,7 @@ test("round 2 MCP metadata, lossless schemas, raw invalid input and both paralle
         session_id: "fixture",
         transcript_path: "/unused",
         cwd: "/test",
-        tool_name: "mcp__neuve__read",
+        tool_name: "mcp__neuve__plugin_read",
         tool_use_id: id,
         tool_input: { value: 42 },
       },

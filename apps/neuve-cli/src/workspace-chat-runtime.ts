@@ -50,7 +50,7 @@ import {
   type AccountName,
 } from "@neuve/runtime";
 import { Context, Effect, Layer, ManagedRuntime, Scope, Stream } from "effect";
-import { thisBuild } from "./review-worker.ts";
+import { thisBuild } from "./cli-command.ts";
 
 export type ChatRuntimeSources = {
   registry: RuntimeRegistryShape;

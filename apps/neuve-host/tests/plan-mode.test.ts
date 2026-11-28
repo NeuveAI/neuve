@@ -12,6 +12,7 @@ import { openChannel } from "../src/worker-runtime";
 import { parseHostEnvelope } from "../src/parse";
 import { configureRuntime, runtimeHooks } from "../src/runtime-hooks";
 import { fauxNonTurnModels } from "./fixtures/non-turn-models";
+import { plantNested } from "../../../packages/channel/tests/helpers";
 
 const model = { provider: "plan-test", modelId: "agent" };
 const nonTurnModels = fauxNonTurnModels(model);
@@ -511,6 +512,43 @@ test("explore rejects options and leaves files, the index, and configured progra
 });
 
 // A broad path selection must honor the same ignore boundary as an explicit historical read.
+test("explore never runs a nested repository's settings", async () => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "neuve plan nested ")));
+	try {
+		const repo = join(root, "checkout");
+		await mkdir(repo);
+		git(repo, "init", "-q");
+		await writeFile(join(repo, "notes.txt"), "first version\n");
+		git(repo, "add", "notes.txt");
+		git(repo, "commit", "-qm", "Initial fixture");
+		const { ran } = await plantNested(repo, root);
+		const { fake, models } = faux();
+		const channel = await open(repo, models, join(root, "home"));
+		try {
+			const actions: JsonObject[] = [
+				{ action: "list" },
+				{ action: "list", path: "sub" },
+				{ action: "search", pattern: "a" },
+				{ action: "history", path: "sub" },
+				{ action: "show", revision: "HEAD", path: ".gitmodules" },
+				{ action: "compare", from: "HEAD~1", to: "HEAD" },
+			];
+			fake.appendResponses([
+				fauxAssistantMessage(actions.map((args, n) => fauxToolCall("explore", args, { id: `explore-${n}` })), { stopReason: "toolUse" }),
+				fauxAssistantMessage("Exploration complete"),
+			]);
+			await ask(channel, { mode: "plan" });
+			const transcript = await results(channel);
+			for (const n of actions.keys()) expect(transcript.get(`explore-${n}`)).toMatchObject({ error: false });
+			expect(await ran()).toBe("");
+		} finally {
+			await channel.close();
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("explore compare omits paths Git now ignores in the whole tree and in a directory", async () => {
 	const root = await mkdtemp(join(tmpdir(), "neuve plan compare "));
 	try {

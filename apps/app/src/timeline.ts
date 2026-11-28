@@ -116,6 +116,7 @@ function tool(
 	tool: Tool,
 	busy: boolean,
 	reviews: ReviewCards,
+	image: (chat: number, call: string, index: number) => string,
 	caption?: string,
 	recap?: string,
 ): Event.Message.Content.Tool {
@@ -141,9 +142,7 @@ function tool(
 					content: review?.result ?? tool.result.text,
 					...(tool.result.images
 						? {
-							images: tool.result.images.map((image) =>
-								`data:${image.mimeType};base64,${image.data}`
-							),
+							images: tool.result.images.map(({ chat }, index) => image(chat, tool.call, index)),
 						}
 						: {}),
 				},
@@ -191,10 +190,15 @@ export function toEvents(
 	agents: ReadonlyMap<string, AgentName> = new Map(),
 	/** The build's agent this chat is, whose replies go by its role. */
 	self?: { author: string; agent: AgentName },
+	/** The host's origin for its image route, empty when the host serves this page. */
+	origin = "",
 ): Event[] {
 	// A run answers the newest message that invoked it, as the channel's run end reports.
 	let asker: string | undefined;
 	const name = (author: string) => authorName(author, people, channels, agents);
+	// Where the host serves a tool result's image, by the chat that stored it.
+	const image = (chat: number, call: string, index: number) =>
+		`${origin}/images/${topic}/${chat}/${encodeURIComponent(call)}/${index}`;
 	// The parts are the only names drawn as mentions: an agent's name only where `listed`, the
 	// agents the message reached, holds it. The parser decides where a mention sits, so any `@name`,
 	// bold included, is offered here.
@@ -301,7 +305,7 @@ export function toEvents(
 		const content: Event.Message.Agent["content"] = item.text ? [text(item.text)] : [];
 		for (const call of item.tools) {
 			const answer = commentAnswer(call);
-			content.push(answer === undefined ? tool(call, busy, reviews, captions[call.call], recaps[call.call]) : text(answer));
+			content.push(answer === undefined ? tool(call, busy, reviews, image, captions[call.call], recaps[call.call]) : text(answer));
 		}
 		for (const call of item.tools) {
 			const name = (reviewTool(call, reviews) ?? planTool(call))?.name ?? call.name;

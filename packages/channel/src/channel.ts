@@ -70,7 +70,7 @@ import { changes, fetchBase, patch } from "./changes";
 import { type Desktop, desktop, DESKTOP_EXTENSION } from "./desktop";
 import { HANDOFF, Handoffs } from "./handoffs";
 import { type Images, images } from "./images";
-import { lanes, LanesDoc } from "./lanes";
+import { LanesDoc } from "./lanes";
 import { failure, type Log, logging, scoped } from "./log";
 import {
 	DeletionEntry,
@@ -90,7 +90,8 @@ import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
+import { deferredPluginTool, pluginDiscovery, PLUGIN_SEARCH } from "./plugin-search";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
 import type {
@@ -172,6 +173,8 @@ export type Options = {
 	resume?: boolean;
 	storage: Storage;
 	models: Models;
+	/** Resolve model limits before work starts. History and model display use the current limits. */
+	prepareModels?(): Promise<void>;
 	ownTools?(provider: string): boolean;
 	env(cwd: string, chat?: ChatId): ExecutionEnv;
 	/** Wrap shared file access for one chat. Check its mode when the file is opened. */
@@ -182,10 +185,9 @@ export type Options = {
 	skills?: string;
 	build?: BuildHost;
 	hostEnvironment?: HostEnvironment;
-	plugins?: {
+	plugins?: PluginOffers & {
 		hidden(): readonly string[];
 		ownsTool(name: string): boolean;
-		httpTools(): ReadonlySet<string>;
 		refresh(registry: Pick<Registry, "snapshot" | "install" | "uninstall">): Promise<void>;
 		waitForStartup(signal: AbortSignal): Promise<void>;
 		close(): Promise<void>;
@@ -262,6 +264,7 @@ export class Channel {
 	#publishedBusy?: boolean;
 	#unsubscribe?: () => void;
 	#unbind?: () => void;
+	#resuming?: Promise<void>;
 	#closed?: Promise<void>;
 	#feed?: { close(): Promise<void>; pending(): boolean };
 	#backgroundTasks = new Set<Promise<void>>();
@@ -311,9 +314,10 @@ export class Channel {
 		const planning: IsPlanning = async (chat, context) =>
 			isPlanning(channel.#harness, chat, context, id => channel.#changingModes.get(id));
 		const registry = createRegistry();
+		const { plugins } = options;
 		const modelSettings = new ModelSettings(options.models, options.defaultModel, options.extension?.thinkingLevel,
 			options.routeModel, options.accountStatuses);
-		registry.install(logging(log, options.plugins?.ownsTool));
+		registry.install(logging(log, plugins && (name => name === PLUGIN_SEARCH || plugins.ownsTool(name))));
 		registry.install(CodingTools);
 		const handoffs = new Handoffs(options.directory);
 		registry.install(handoffs.extension);
@@ -346,7 +350,6 @@ export class Channel {
 		if (options.browser) registry.install(browser(options.browser));
 		if (options.images) registry.install(images(options.images));
 		if (options.tabs) registry.install(tabs(options.tabs));
-		registry.install(lanes({ ...options, name: options.prefix || options.name }));
 		registry.install(subagent(
 			(handle, input, scope) => channel.submitInput(handle, input, scope),
 			(tx, chat, requested) => modelNamedByOwner(tx, chat, requested, modelSettings),
@@ -385,7 +388,20 @@ export class Channel {
 		if (options.build?.query) registry.install(query);
 		const installGuarded = install(registry, options.extension, planning, !!options.planFileAccess, log,
 			(chat, scope) => channel.#builds.paused(chat, scope));
-		const { plugins } = options;
+		const nativeSearch = (model: ModelRef | undefined) => {
+			if (!model) return;
+			if (options.ownTools?.(model.provider)) return "codex";
+			if (options.models.getModel(model.provider, model.modelId)?.api === "neuve-runtime") return "claude";
+		};
+		const discovery = plugins && pluginDiscovery(
+			(id, context) => channel.#harness.conversation(id, context),
+			nativeSearch, planning, plugins.ownsTool,
+			async (tools, id, context) => tools.some(tool => plugins.nativeTool?.(tool.name)) &&
+				await approvals.attended(channel.#harness, id, context)
+				? tools.filter(tool => !plugins.nativeTool?.(tool.name))
+				: tools,
+		);
+		if (discovery) installGuarded(discovery.extension);
 		const unpublishedPlugins = new Set<string>();
 		const pluginRegistry = {
 			snapshot: () => registry.snapshot(),
@@ -399,14 +415,26 @@ export class Channel {
 				const names = new Set(extension.tools?.map(tool => tool.name));
 				return installGuarded({
 					...extension,
+					tools: extension.tools?.map(tool => discovery?.guard(tool) ?? tool),
 					sections: extension.sections?.map(section => ({
 						...section,
 						async render(input, context) {
-							const provider = input.agent.model?.provider;
-							const http = provider && options.ownTools?.(provider) ? plugins?.httpTools() : undefined;
-							if (!input.agent.tools.some(tool => names.has(tool.name) && (!http || http.has(tool.name)))) return;
 							if (await planning(input.conversationId, context)) return;
-							return section.render(input, context);
+							const search = nativeSearch(input.agent.model);
+							const http = search === "codex" ? plugins?.httpTools() : undefined;
+							const candidates = input.agent.tools.filter(tool => names.has(tool.name) &&
+								(!http || http.has(tool.name) || plugins?.nativeTool?.(tool.name)));
+							const tools = candidates.some(tool => plugins?.nativeTool?.(tool.name)) &&
+								await approvals.attended(input.read, input.conversationId, context)
+								? candidates.filter(tool => !plugins?.nativeTool?.(tool.name))
+								: candidates;
+							if (!tools.length) return;
+							const listed = search === "claude" ? [] : http ? tools.filter(tool => http.has(tool.name)) : tools;
+							const text = await section.render({ ...input, agent: { ...input.agent, tools: listed } }, context);
+							if (text === undefined || !listed.length) return text;
+							return `${text}\n\n${search === "codex"
+								? "Use Codex's tool discovery to load tools from the `neuve_plugins` server on demand."
+								: `Use \`${PLUGIN_SEARCH}\` to load these tools before calling them.`}`;
 						},
 					})),
 				});
@@ -429,7 +457,10 @@ export class Channel {
 			: registry;
 		refreshPlugins?.();
 		const harness = await Harness.open(options.storage, {
-			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins?.httpTools),
+			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins && {
+				...plugins,
+				deferredTools: () => new Set(visible.snapshot().tools().flatMap(({ tool }) => deferredPluginTool(tool) ? [tool.name] : [])),
+			}),
 			registry: visible,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },
 			conversationCreated: clearInheritedQuery,
@@ -638,15 +669,28 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
-		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
-		if (options.resume !== false) {
-			await channel.#builds.finishStops();
-			await channel.#builds.reconcileRuns();
-			await channel.#builds.recoverMentionEntries();
-			await channel.#placeResumingChats();
-			harness.resume();
-			void channel.#builds.resume();
+		const prepareModels = options.resume !== false && options.prepareModels;
+		const deferred = prepareModels && await channel.#hasRecoverableWork();
+		const feed = Promise.resolve().then(async () => {
+			channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
+		});
+		if (prepareModels && deferred) {
+			const resuming = feed.then(() => prepareModels.call(options)).then(() => {
+				if (!channel.#closing.signal.aborted) return channel.#resumeWork();
+			});
+			channel.#resuming = resuming;
+			channel.#backgroundTasks.add(resuming);
+			void resuming.then(() => {
+				channel.#resuming = undefined;
+			}, error => {
+				void channel.close().catch(cleanup => log("error", "channel.close.failed", failure(cleanup)));
+				log("error", "channel.resume.failed", failure(error));
+			}).finally(() => {
+				channel.#backgroundTasks.delete(resuming);
+			});
 		}
+		await feed;
+		if (options.resume !== false && !deferred) await channel.#resumeWork();
 		log("info", "channel.open", { name: value.name, project: options.project });
 		return channel;
 		} catch (error) {
@@ -688,6 +732,9 @@ export class Channel {
 		}
 	}
 
+	/** Background recovery, which the worker observes to retire a channel that failed to open. */
+	get recovered(): Promise<void> | undefined { return this.#resuming; }
+
 	/** Runs a client request, logging its outcome with the caller's `trace` id. */
 	async handle(request: Request, send: Send, trace?: string): Promise<unknown> {
 		if (this.#closed) throw new Error("The channel is shutting down");
@@ -701,6 +748,10 @@ export class Channel {
 			...("model" in request && request.model ? { model: request.model } : {}),
 		};
 		try {
+			if (this.#resuming && request.op !== "watch" && request.op !== "info" && request.op !== "models" && request.op !== "tool-image") {
+				await this.#resuming;
+				if (this.#closed) throw new Error("The channel is shutting down");
+			}
 			const value = await this.#handle(request, send);
 			// Watches and polls are constant traffic; their failures still log below.
 			const level = request.op === "watch" || request.op === "info" || request.op === "models"
@@ -846,6 +897,8 @@ export class Channel {
 				return this.#rename(request);
 			case "watch":
 				return this.#watch(request, send);
+			case "tool-image":
+				return this.#toolImage(request);
 			case "typing": {
 				this.#author(request.author);
 				const { id } = await this.#conversation(request.chat);
@@ -1145,6 +1198,8 @@ export class Channel {
 
 	/** `author`'s kill records a Stop in each chat it ended, so their next runs know. */
 	async kill(author?: string): Promise<void> {
+		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		const { chats } = await this.info();
 		const busy = chats.filter((chat) => chat.busy);
 		this.#log("warn", "channel.kill", { chats: busy.map((c) => c.id) });
@@ -1276,6 +1331,7 @@ export class Channel {
 		// The chat's next run reads this message, so it must fit the model the chat has now.
 		const stored = await this.#harness.snapshot(PendingModelDoc, conversation.id, context);
 		const model = stored?.pending?.model ?? (await conversation.agent(context)).model;
+		if (model && request.files?.length) await this.#options.prepareModels?.();
 		const selected = model && this.#options.models.getModel(model.provider, model.modelId);
 		if (selected) room.checkContext(selected, request);
 		const entry = room.draft(request.author, request.text, Date.now(), request);
@@ -1426,9 +1482,12 @@ export class Channel {
 
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context): Promise<Submission>;
 	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit: () => boolean): Promise<Submission | undefined>;
-	submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
+		await this.#resuming;
+		if (this.#closed) throw new Error("The channel is shutting down");
 		return this.#admitted(handle.id, async () => {
 			if (canSubmit?.() === false) return;
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
 			if (canSubmit?.() === false) return;
 			await this.#placeChatLane(handle.id, callContext);
@@ -1604,6 +1663,25 @@ export class Channel {
 		for (const chat of chats) await this.#placeChatLane(chat, context);
 	}
 
+	async #hasRecoverableWork(): Promise<boolean> {
+		return this.#harness.commit(async tx => {
+			for (const status of ["pending", "running", "waiting"] as const) {
+				if ((await tx.scanTasks({ status, abortRequested: false }, 1)).items.length) return true;
+			}
+			return (await this.#options.storage.scanSubmissions({ status: "queued" }, 1, undefined, context)).items.length > 0;
+		}, context);
+	}
+
+	async #resumeWork(): Promise<void> {
+		await this.#builds.finishStops();
+		await this.#builds.reconcileRuns();
+		await this.#builds.recoverMentionEntries();
+		await this.#placeResumingChats();
+		if (this.#closing.signal.aborted) return;
+		this.#harness.resume();
+		void this.#builds.resume();
+	}
+
 	async #invoke(
 		conversation: Conversation,
 		{ bound, mode, attended, input, settled, selection, ownerText }: {
@@ -1621,6 +1699,7 @@ export class Channel {
 		let modeChange: Awaited<ReturnType<typeof setChatMode>>;
 		let submission: SubmissionId;
 		try {
+			await this.#options.prepareModels?.();
 			await this.#modelSettings.check(this.#harness, chat, selection ?? {}, callContext);
 			if (mode !== undefined) this.#changingModes.set(chat, settled);
 			if (mode !== undefined || bound) {
@@ -1844,6 +1923,7 @@ export class Channel {
 		const { models } = this.#options;
 		const signal = this.#closing.signal;
 		const pickFor = async (kind: "caption" | "recap") => {
+			await this.#options.prepareModels?.();
 			const captured = this.#options.extension?.nonTurnModels?.(kind, id);
 			if (captured) {
 				const model = await pick(captured);
@@ -1918,6 +1998,23 @@ export class Channel {
 				this.#listeners.delete(listener);
 			}
 		}
+	}
+
+	/** One stored tool-result image, read when a person opens its tool group. */
+	async #toolImage({ chat, call, index }: Extract<Request, { op: "tool-image" }>) {
+		const conversation = await this.#conversation(chat);
+		let cursor: Cursor | undefined;
+		do {
+			const page = await conversation.entries({}, 16, cursor, context);
+			for (const entry of page.items) {
+				const message = entry.model?.[0];
+				if (entry.conversationId !== chat || message?.role !== "toolResult" || message.toolCallId !== call) continue;
+				const image = room.images(message)?.[index];
+				if (image) return image;
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		throw new Error("No such tool image");
 	}
 
 	/** Replays the chat's active transcript, then streams. Resolves when the stream ends. */
@@ -2330,14 +2427,14 @@ function events(entry: EntryRecord): Event[] {
 		// pi reports this only when recovery finds an unsafe call that a previous worker started.
 		const interrupted = codes.includes("interrupted");
 		const handoff = codes.includes(HANDOFF);
-		const images = room.images(message);
+		const images = message.content.flatMap(block => block.type === "image" ? [{ mimeType: block.mimeType }] : []);
 		return [{
 			kind: "result",
 			chat,
 			call: message.toolCallId,
 			error: message.isError,
 			text: room.text(message),
-			...(images ? { images } : {}),
+			...(images.length ? { images } : {}),
 			...(stopped ? { stopped: true } : {}),
 			...(interrupted ? { interrupted: true } : {}),
 			...(handoff ? { handoff: true } : {}),

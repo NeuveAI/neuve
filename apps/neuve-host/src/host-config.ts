@@ -149,7 +149,6 @@ export async function bindConfiguredCatalog(options?: {scope: "automatic"}): Pro
 	configureRuntime({
 		modelAvailability: () => config.model ? [config.model] : [],
 		onFork: async (source, child) => (await import("./fork-origin")).forkOrigin(source, child),
-		forkLane: async (...args) => (await import("./fork-origin")).forkLane(...args),
 	});
 	const catalog = await import("./catalog");
 	if (options?.scope === "automatic") {

@@ -13,6 +13,7 @@ import {
 import { channelProject, type Listing } from "@ace/host/protocol";
 
 import { AgentAsks } from "./agent-asks";
+import { origin } from "./address";
 import { useAgentAvatar } from "./agent-avatar";
 import { Approval } from "./approval";
 import { approvalView, shownApprovals } from "./approval-card";
@@ -202,6 +203,7 @@ export function Conversation(
 					said,
 					agents,
 					own,
+					origin,
 				),
 				transcript.items,
 				reviews,

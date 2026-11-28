@@ -88,6 +88,10 @@
 			"types": "./.types/src/external-lanes.d.ts",
 			"default": "./src/external-lanes.ts"
 		},
+		"./git": {
+			"types": "./.types/src/git.d.ts",
+			"default": "./src/git.ts"
+		},
 		"./operations-protocol": {
 			"types": "./.types/src/operations-protocol.d.ts",
 			"default": "./src/operations-protocol.ts"

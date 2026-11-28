@@ -21,16 +21,20 @@ test("plugin settings validate native payloads, preserve preferences, and restri
 		const plugins = async () => (await settings()).plugins;
 		const description = "Read and update Linear issues, projects, and teams.";
 		const name = "LINEAR_API_KEY";
+		const devtools = {
+			name: "chrome-devtools", displayName: "Chrome DevTools",
+			description: "Inspect and automate Ace's dedicated development browser.", enabled: true, credentials: [],
+		};
 		expect(await plugins()).toEqual([{
 			name: "linear", displayName: "Linear", description, enabled: false, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
-		}]);
-		const preferences = parseNativeHostRequest({ op: "preferences", plugins: { linear: true } });
+		}, devtools]);
+		const preferences = parseNativeHostRequest({ op: "preferences", plugins: { linear: true, "chrome-devtools": false } });
 		if (preferences.op !== "preferences" || !preferences.plugins) throw new Error("Missing plugin preferences");
 		savePlugins(preferences.plugins);
 		saveFolder(root);
 		expect(await plugins()).toEqual([{
 			name: "linear", displayName: "Linear", description, enabled: true, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
-		}]);
+		}, { ...devtools, enabled: false }]);
 		expect(() => parseNativeHostRequest({ op: "preferences", plugins: { linear: "on" } })).toThrow();
 
 		expect(parseNativeHostRequest({ op: "plugin-sign-in", plugin: "linear" })).toEqual({
@@ -50,14 +54,14 @@ test("plugin settings validate native payloads, preserve preferences, and restri
 		await setPluginKey(stored.plugin, stored.name, stored.value);
 		expect(await plugins()).toEqual([{
 			name: "linear", displayName: "Linear", description, enabled: true, signIn: { signedIn: false }, credentials: [{ name, source: "keychain", stored: true }],
-		}]);
+		}, { ...devtools, enabled: false }]);
 		const remove = parseNativeHostRequest({ op: "plugin-key-remove", plugin: "linear", name });
 		if (remove.op !== "plugin-key-remove") throw new Error("Missing key remove request");
 		await removePluginKey(remove.plugin, remove.name);
 		await writeFile(join(root, "settings.json"), JSON.stringify({ folder: root, plugins: "on" }));
 		expect(await plugins()).toEqual([{
 			name: "linear", displayName: "Linear", description, enabled: false, signIn: { signedIn: false }, credentials: [{ name, source: "missing", stored: false }],
-		}]);
+		}, devtools]);
 		savePlugins({ linear: true });
 		expect((await plugins())[0]?.enabled).toBe(true);
 	} finally {

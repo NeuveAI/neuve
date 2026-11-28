@@ -37,7 +37,8 @@ function imageResult(data: ToolData): Block | undefined {
 	if (!data.images?.length) return;
 	let blocks = data.images.map((src, index) => ({
 		key: `${data.id}:${index}`,
-		block: imageBlock(src, 0, 0, `Image returned by ${data.name}`, "contain"),
+		// A tool image on another origin is the host's, which allows this page to read it (CORS).
+		block: imageBlock(src, 0, 0, `Image returned by ${data.name}`, "contain", /^https?:\/\//.test(src)),
 	}));
 	let inner = (width: number) => Math.max(0, width - RESULT_PAD_X * 2 - 2);
 	let measure = (width: number) => ({

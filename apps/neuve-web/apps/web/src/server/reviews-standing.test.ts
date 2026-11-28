@@ -34,7 +34,6 @@ import {
 } from "../../../../../../packages/records-core/tests/support"
 
 import { deskRead, successorOf } from "./desk.server"
-import { LANE_FACTS } from "./lane-facts"
 import { REPOSITORY_VARIABLE } from "./records.server"
 import {
   cycleEntry,
@@ -478,35 +477,61 @@ test("an older review of a branch counts nothing; the newer counts its own, and 
   expect(across.nextUnitId).toBe(moved.unitIds[0])
 })
 
-test("a review a later review's range holds counts nothing, with no lineage between them", async () => {
-  // Why (NEU-433): a pull request reviewed two or three times must not multiply the wait.
-  const first = oldReview("aaaaaaa", [
-    { lane: "human-required" },
-    { lane: "human-suggested" },
-  ])
-  const later = oldReview("bbbbbbb", [{ lane: "human-required" }])
-  const { listed, standing } = await read(
-    await seed([first, later]),
-    Effect.gen(function* () {
-      const listed = (yield* ReviewList.reviews({ limit: 200 })).reviews
-      return {
-        listed,
-        standing: yield* standingOf(
-          listed,
-          LANE_FACTS,
-          new Set([first.cycleId])
-        ),
-      }
+test("a review a later review's range holds counts nothing, even at its own address", async () => {
+  // A cycle load still needs later reviews that hold its range, even without lineage.
+  const repo = mkdtempSync(join(tmpdir(), "reviews-replaced-"))
+  const before = process.env[REPOSITORY_VARIABLE]
+  const git = (...args: Array<string>) => {
+    const run = Bun.spawnSync([
+      "git",
+      "-C",
+      repo,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      ...args,
+    ])
+    if (run.exitCode !== 0) throw new Error(run.stderr.toString())
+    return run.stdout.toString().trim()
+  }
+  try {
+    git("init", "--quiet", "-b", "main")
+    git("commit", "--quiet", "--allow-empty", "-m", "Base")
+    const base = git("rev-parse", "HEAD")
+    git("commit", "--quiet", "--allow-empty", "-m", "Review this")
+    const head = git("rev-parse", "HEAD")
+    const first = oldReview(
+      head,
+      [{ lane: "human-required" }, { lane: "human-suggested" }],
+      base
+    )
+    const later = oldReview(head, [{ lane: "human-required" }], base)
+    await seed([first, later], storeLocationIn(join(repo, ".git")))
+    process.env[REPOSITORY_VARIABLE] = repo
+
+    const own = await reviewsRead({
+      page: 1,
+      filter: "all",
+      cycle: first.cycleId,
     })
-  )
-  expect(row(listed, standing, first.cycleId)).toMatchObject({
-    newer: true,
-    gate: [],
-  })
-  expect(waitingOf(listed, standing)).toMatchObject({
-    units: 1,
-    nextUnitId: later.unitIds[0],
-  })
+    expect(own).toMatchObject({
+      status: "ready",
+      data: {
+        reviews: [{ id: first.cycleId, newer: true, gate: [] }],
+        waiting: { units: 0 },
+      },
+    })
+    const list = await reviewsRead({ page: 1, filter: "waiting" })
+    expect(list).toMatchObject({
+      status: "ready",
+      data: { waiting: { units: 1, nextUnitId: later.unitIds[0] } },
+    })
+  } finally {
+    if (before === undefined) delete process.env[REPOSITORY_VARIABLE]
+    else process.env[REPOSITORY_VARIABLE] = before
+    rmSync(repo, { recursive: true, force: true })
+  }
 })
 
 test("a review a newer one took over in part counts the units it still holds", async () => {

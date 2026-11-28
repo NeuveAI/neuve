@@ -599,7 +599,13 @@ export async function reviewsRead(options: {
         recent.reviews.some((review) => review.cycleId === cycle)
           ? []
           : (yield* ReviewList.reviews({ limit: 1, cycleId: cycle })).reviews
-      const reviews = [...recent.reviews, ...scoped]
+      const reviews =
+        cycle === undefined
+          ? recent.reviews
+          : [
+              ...recent.reviews.filter((review) => review.cycleId >= cycle),
+              ...scoped,
+            ]
       const descends = yield* Effect.promise(() =>
         orNone(
           ancestryOf(

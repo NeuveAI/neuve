@@ -13,6 +13,7 @@ import * as catalog from "./catalog";
 import { Connection, hostedAuth, request } from "./client";
 import { frozen } from "./compute";
 import { config } from "./config";
+import { forkLane } from "./fork-origin";
 import { refusal } from "./http";
 import { models as providers } from "./keys";
 import { preference } from "./preferences";
@@ -114,49 +115,19 @@ export async function fork(id: string, author: string): Promise<catalog.Listing>
 		connection.close();
 	}
 	const root = info.chats.find((chat) => chat.id === ROOT_CONVERSATION_ID);
-	const refs = await git(source.project, [
-		"for-each-ref",
-		"--format=%(refname:lstrip=2)",
-		"refs/heads/",
-	]);
-	const branches = new Set(refs.stdout.split("\n").map((ref) => ref.split("/")[0]!));
-	const record = catalog.fork(source, root?.model || source.model, branches);
+	const record = catalog.fork(source, root?.model || source.model);
 	const lane = changes.lane
 		? {
 			name: changes.lane,
-			path: `${source.project}/.lane/trees/${record.prefix}/${changes.lane}`,
+			path: await forkLane(source.project, `${record.prefix}/${changes.lane}`, changes.head, record.id, changes.lane),
 			// The source's fork point, so the Diff shows its commits as well as the fork's own.
 			base: changes.base,
 		}
 		: undefined;
-	if (lane) {
-		const place = (await import("./runtime-hooks")).runtimeHooks().forkLane;
-		if (place) lane.path = await place(source.project, `${record.prefix}/${lane.name}`, changes.head, record.id, lane.name);
-		else await newLane(source.project, `${record.prefix}/${lane.name}`, changes.head);
-	}
 	const saved = catalog.save(lane ? { ...record, lane } : record);
 	await (await import("./runtime-hooks")).runtimeHooks().onFork?.(id, record.id);
 	await request(record.id, { op: "say", author, text: seed(info, changes, lane) });
 	return saved;
-}
-
-async function newLane(project: string, branch: string, base: string): Promise<void> {
-	// Ace's lane is in the helpers directory on the adopted PATH, which `env` makes Bun search.
-	const child = Bun.spawn(["lane", "new", branch, "--base", base], {
-		cwd: project,
-		env: process.env,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [stdout, stderr, status] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	if (status !== 0) {
-		throw new Error(`Could not start lane ${branch}: ${(stderr || stdout).trim()}`);
-	}
 }
 
 function seed(info: ChannelInfo, changes: Changes, lane: { name: string } | undefined): string {
@@ -241,7 +212,7 @@ async function disposeChatLanes(record: catalog.Listing): Promise<void> {
 			const found = listed.stdout.split("\0\0").map(item => item.split("\0")).find(fields => fields[0] === `worktree ${path}`);
 			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The work lane's Git registration changed, so it was kept");
 			// Do not let status.showUntrackedFiles=no hide work from Git's removal check.
-			const removed = await git(record.project, ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", "--", path]);
+			const removed = await git(record.project, ["worktree", "remove", "--", path], ["status.showUntrackedFiles=normal"]);
 			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the work lane");
 			if (existsSync(path)) throw new Error("Git reported removal but the work lane folder remains");
 			log("info", "chat.lane.removed", { channel: record.id, path, branch: lane.branch });
@@ -292,8 +263,7 @@ async function hold(id: string): Promise<void> {
 }
 
 /**
- * Removes the channel and the lane worktrees in its directory, which predate the lane CLI; lane
- * branches stay in the project. Lanes `lane new` created stay too, for `lane prune` or `lane rm`.
+ * Removes the channel and its state directory's worktrees. Lane branches stay in the project.
  */
 export async function remove(id: string): Promise<void> {
 	const record = catalog.read(id);

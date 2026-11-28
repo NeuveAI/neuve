@@ -10,6 +10,7 @@ const dom = new JSDOM("<!doctype html><body></body>");
 const { window } = dom;
 Object.assign(globalThis, {
 	window,
+	location: window.location,
 	document: window.document,
 	navigator: window.navigator,
 	getSelection: () => window.getSelection(),

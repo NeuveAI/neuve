@@ -1,4 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import { defineDoc, defineExtension, GenerationTask, hook, type ConversationId, type Harness } from "@earendil-works/pi-durable";
 import { ApprovalRequestsDefinition, type ApprovalRequest, type ApprovalRequestsState, type Event, type Request } from "./protocol";
@@ -101,12 +102,16 @@ export class Approvals {
 		throw new Error("This answer could not be delivered, so it was not applied.");
 	}
 
+	async attended(read: Pick<Harness, "snapshot">, chat: ConversationId, context: Context) {
+		await this.#admitting.get(chat)?.catch(() => {});
+		return (await read.snapshot(AttendanceDoc, chat, context))?.attended ?? false;
+	}
+
 	readonly extension = defineExtension({
 		name: "neuve-chat-attendance",
 		hooks: [hook(GenerationTask, {
 			beforeRequest: async ({ messages }, api, context) => {
-				await this.#admitting.get(api.conversationId)?.catch(() => {});
-				const attended = (await api.snapshot(AttendanceDoc, api.conversationId, context))?.attended ?? false;
+				const attended = await this.attended(api, api.conversationId, context);
 				const marker: SystemMessage = {
 					role: "system", content: "", timestamp: messages.at(-1)?.timestamp ?? 0,
 					sections: { [ATTENDED_SECTION]: String(attended) },

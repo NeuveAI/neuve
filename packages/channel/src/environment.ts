@@ -60,6 +60,7 @@ export function environment(
 				`Model: ${modelName ?? "unknown"}. Effort: ${agent.thinkingLevel ?? "default"}. Context used: ${contextUsage}.`,
 				`Work lane: ${lane?.[0] ?? "none recorded for this folder"}. Runtime shell: ${hasShell ? `available (${shell})` : "unavailable"}.`,
 				"Ace serves the channel, threads, work log, plan and tools. Neuve is the neuve command, its skill, reviews and the desk.",
+				...(plan ? [] : ["Plans for the person to approve are written in Plan mode, which the person picks in the composer. Asked for a plan outside it, answer as usual and tell the person once that they can pick Plan mode to get a plan to approve."]),
 			].join("\n");
 		},
 	};

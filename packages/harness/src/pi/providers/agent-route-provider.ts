@@ -256,6 +256,7 @@ export const createAgentRouteProvider = (
 /** A coding session's `Models`: the route alone, under its physical provider's ID. */
 export const createRouteModels = (
   options: RouteModelsOptions,
+  models = createModels(),
 ): MutableModels => {
   requireDirectRoute(options.route);
   if (options.purpose !== undefined) {
@@ -281,7 +282,6 @@ export const createRouteModels = (
     sessionId: conversationId(options.runId, options.sessionAffinity),
     toolsDescription: "Neuve's tools.",
   };
-  const models = createModels();
   models.setProvider(
     routeProvider(options, options.route.provider, async () => dispatch),
   );

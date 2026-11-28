@@ -52,7 +52,7 @@ export async function pluginCredential(server: OAuthServer, lookup = key): Promi
 }
 
 export function pluginMcp(
-	server: OAuthServer, lookup = key, info: ConstructorParameters<typeof Client>[0] = { name: "ace", version: "1" },
+	server: OAuthServer, lookup = key, info: ConstructorParameters<typeof Client>[0] = { name: "neuve", version: "1" },
 ): { client: Client; transport: StreamableHTTPClientTransport } {
 	const sent = new Map<string, Credential["kind"]>();
 	const rejected = new WeakMap<Response, string>();

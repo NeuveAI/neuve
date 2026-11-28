@@ -6,8 +6,10 @@ import { protocolLog, type LogEntry } from "../src/log.ts";
 test("the protocol log keeps every line, and none of what is the person's", () => {
   const entries: LogEntry[] = [];
   const log = protocolLog((entry) => entries.push(entry));
-  // This session serves Neuve's tools, so a server named `neuve` is Neuve's own.
-  log.serves();
+  log.serves({
+    neuve: "http://127.0.0.1/mcp",
+    neuve_plugins: "http://127.0.0.1/plugins/mcp",
+  });
   log.know("tok-1234567890", "<token>");
   log.know("own-server", "<server-1>");
   log.onLine({
@@ -93,9 +95,20 @@ test("the protocol log keeps every line, and none of what is the person's", () =
       params: { name: "neuve" },
     },
   });
-  expect(entries.slice(-2).map((e) => e.message)).toEqual([
+  log.onLine({
+    direction: "in",
+    message: {
+      method: "mcpServer/startupStatus/updated",
+      params: { name: "neuve_plugins" },
+    },
+  });
+  expect(entries.slice(-3).map((e) => e.message)).toEqual([
     { method: "mcpServer/startupStatus/updated", params: { name: "<server>" } },
     { method: "mcpServer/startupStatus/updated", params: { name: "neuve" } },
+    {
+      method: "mcpServer/startupStatus/updated",
+      params: { name: "neuve_plugins" },
+    },
   ]);
 });
 

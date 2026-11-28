@@ -1,13 +1,13 @@
-import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 
-test("production coding owner survives fresh idle and genuine safe native continuation", async () => {
-  const root = mkdtempSync(join(tmpdir(), "coding-certificate-reopen-"));
+const root = mkdtempSync(join(tmpdir(), "coding-certificate-reopen-"));
+const driver = join(root, "driver.ts");
+
+beforeAll(() => {
   const resolve = (path: string) => JSON.stringify(import.meta.resolve(path));
-  const driver = join(root, "driver.ts");
-  mkdirSync(join(root, "datasets", "coding"), { recursive: true });
   writeFileSync(
     driver,
     `
@@ -21,7 +21,7 @@ import { Harness, createRegistry } from ${resolve("@earendil-works/pi-durable")}
 import { openNodeSqliteStorage } from ${resolve("@earendil-works/pi-durable/storage/sqlite/node")};
 import { Effect } from ${resolve("effect")};
 import { builtinModels } from ${resolve("@earendil-works/pi-ai/providers/all")};
-import { codingWorkerSetup } from ${resolve("../../../../../apps/neuve-cli/src/workspace-cli.ts")};
+import { codingWorkerSetup } from ${resolve("../../../../../apps/neuve-cli/src/workspace-worker.ts")};
 import { SOL_ROUTE } from ${resolve("../../../src/route.ts")};
 import { CaptureRecords, DumpFailed, exportCapturedDump, readSessionDump, exportPortableSnapshot } from ${resolve("../../../src/session-dump.ts")};
 import { storeLocationIn } from ${resolve("@neuve/records-core")};
@@ -63,6 +63,7 @@ try {
       const secret = request.headers.get("authorization").replace(/^Bearer /, "");
       return sse([created("safe-" + phase + readFileSync(token + ".count", "utf8").trim()), ...messageItem(0, "safe-" + phase + readFileSync(token + ".count", "utf8").trim(), "final_answer", phase === "echo" ? secret : "Safe response."), completed("safe-" + phase + readFileSync(token + ".count", "utf8").trim())]);
     });
+    await timed("setup.prepareModels", () => setup.prepareModels(worker));
     await timed("turn", async () => (await conversation.submit({ type: "input", content: "Safe input." }, context)).wait(context));
     await timed("harness.close", () => harness.close(context));
     if (phase === "crash") process.kill(process.pid, "SIGKILL");
@@ -118,86 +119,99 @@ finally {
 }
 `,
   );
-  const run = async (phase: string, scenario = "safe") => {
-    const started = performance.now();
-    const child = Bun.spawn([process.execPath, driver, phase, scenario], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [out, err, code] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-    console.error(
-      `[coding-reopen] ${scenario}-${phase} ${Math.round(performance.now() - started)} ms, load ${loadavg()[0]?.toFixed(1)}\n${err}`,
-    );
-    if (phase === "crash" && code === 137) return { crashed: true };
-    if (code !== 0) throw new Error(`coding fixture exited ${code}: ${err}`);
-    writeFileSync(join(root, `${scenario}-${phase}-${Date.now()}.stdout`), out);
-    writeFileSync(join(root, `${scenario}-${phase}-${Date.now()}.stderr`), err);
-    return JSON.parse(out.trim());
-  };
-  try {
-    const first = await run("turn");
-    expect(first).toMatchObject({
+});
+
+afterAll(() => {
+  if (process.env["NEUVE_CAPTURE_INTEGRITY_KEEP"] === "1")
+    console.log(`Coding reopen evidence: ${root}`);
+  else rmSync(root, { recursive: true, force: true });
+});
+
+const run = async (phase: string, scenario = "safe") => {
+  const started = performance.now();
+  const child = Bun.spawn([process.execPath, driver, phase, scenario], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  console.error(
+    `[coding-reopen] ${scenario}-${phase} ${Math.round(performance.now() - started)} ms, load ${loadavg()[0]?.toFixed(1)}\n${err}`,
+  );
+  if (phase === "crash" && code === 137) return { crashed: true };
+  if (code !== 0) throw new Error(`coding fixture exited ${code}: ${err}`);
+  writeFileSync(join(root, `${scenario}-${phase}-${Date.now()}.stdout`), out);
+  writeFileSync(join(root, `${scenario}-${phase}-${Date.now()}.stderr`), err);
+  return JSON.parse(out.trim());
+};
+
+test("production coding owner survives fresh idle and genuine safe native continuation", async () => {
+  const first = await run("turn");
+  expect(first).toMatchObject({
+    ok: true,
+    complete: true,
+    turns: 1,
+    requests: 1,
+    modelLists: 1,
+    leases: 1,
+  });
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const idle = await run("idle");
+    expect(idle).toMatchObject({
       ok: true,
       complete: true,
       turns: 1,
-      requests: 1,
-      modelLists: 1,
-      leases: 1,
+      requests: 0,
+      modelLists: 0,
+      leases: first.leases,
+      identity: first.identity,
     });
-    for (let cycle = 0; cycle < 2; cycle++) {
-      const idle = await run("idle");
-      expect(idle).toMatchObject({
-        ok: true,
-        complete: true,
-        turns: 1,
-        requests: 0,
-        modelLists: 1,
-        // Each fresh worker leases once for its catalogue lookup.
-        leases: first.leases + cycle + 1,
-        identity: first.identity,
-      });
-      expect(idle.before).toBe(idle.after);
-    }
-    const continued = await run("turn");
-    expect(continued).toMatchObject({
-      ok: true,
-      complete: true,
-      turns: 2,
-      requests: 1,
-    });
-    expect(await run("idle")).toMatchObject({ ok: true, complete: true });
-    expect(await run("mutate")).toMatchObject({ ok: true, complete: true });
-    expect(await run("turn", "physical")).toMatchObject({ ok: true, turns: 1 });
-    expect(await run("native-mutate", "physical")).toMatchObject({
-      ok: true,
-      complete: true,
-    });
-    expect(await run("turn", "exposure")).toMatchObject({ ok: true, turns: 1 });
-    expect(await run("echo", "exposure")).toMatchObject({
-      ok: false,
-      tag: "DumpFailed",
-      retained: true,
-      reason: expect.stringContaining("credential exposure"),
-    });
-    expect(await run("idle", "exposure")).toMatchObject({
-      ok: false,
-      tag: "DumpFailed",
-      retained: true,
-      reason: expect.stringContaining("credential exposure"),
-    });
-    expect(await run("turn", "crash")).toMatchObject({ ok: true, turns: 1 });
-    expect(await run("crash", "crash")).toEqual({ crashed: true });
-    expect(await run("turn", "crash")).toMatchObject({
-      ok: true,
-      complete: false,
-    });
-  } finally {
-    if (process.env["NEUVE_CAPTURE_INTEGRITY_KEEP"] === "1")
-      console.log(`Coding reopen evidence: ${root}`);
-    else rmSync(root, { recursive: true, force: true });
+    expect(idle.before).toBe(idle.after);
   }
+  const continued = await run("turn");
+  expect(continued).toMatchObject({
+    ok: true,
+    complete: true,
+    turns: 2,
+    requests: 1,
+    modelLists: 1,
+  });
+  expect(await run("idle")).toMatchObject({ ok: true, complete: true });
+  expect(await run("mutate")).toMatchObject({ ok: true, complete: true });
+}, 120_000);
+
+test("a changed native database still exports", async () => {
+  expect(await run("turn", "physical")).toMatchObject({ ok: true, turns: 1 });
+  expect(await run("native-mutate", "physical")).toMatchObject({
+    ok: true,
+    complete: true,
+  });
+}, 120_000);
+
+test("a credential echo refuses export and keeps the native data", async () => {
+  expect(await run("turn", "exposure")).toMatchObject({ ok: true, turns: 1 });
+  expect(await run("echo", "exposure")).toMatchObject({
+    ok: false,
+    tag: "DumpFailed",
+    retained: true,
+    reason: expect.stringContaining("credential exposure"),
+  });
+  expect(await run("idle", "exposure")).toMatchObject({
+    ok: false,
+    tag: "DumpFailed",
+    retained: true,
+    reason: expect.stringContaining("credential exposure"),
+  });
+}, 120_000);
+
+test("a crashed turn reopens as incomplete", async () => {
+  expect(await run("turn", "crash")).toMatchObject({ ok: true, turns: 1 });
+  expect(await run("crash", "crash")).toEqual({ crashed: true });
+  expect(await run("turn", "crash")).toMatchObject({
+    ok: true,
+    complete: false,
+  });
 }, 120_000);

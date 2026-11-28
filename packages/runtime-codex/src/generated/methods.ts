@@ -21,6 +21,8 @@ import type { SkillsListParams } from "./v2/SkillsListParams";
 import type { SkillsListResponse } from "./v2/SkillsListResponse";
 import type { SkillsExtraRootsSetParams } from "./v2/SkillsExtraRootsSetParams";
 import type { SkillsExtraRootsSetResponse } from "./v2/SkillsExtraRootsSetResponse";
+import type { PluginReconcileParams } from "./v2/PluginReconcileParams";
+import type { PluginReconcileResponse } from "./v2/PluginReconcileResponse";
 import type { AppsListParams } from "./v2/AppsListParams";
 import type { AppsListResponse } from "./v2/AppsListResponse";
 import type { ListMcpServerStatusParams } from "./v2/ListMcpServerStatusParams";
@@ -101,6 +103,7 @@ export type ClientMethods = {
   "hooks/list": { params: HooksListParams; response: HooksListResponse };
   "skills/list": { params: SkillsListParams; response: SkillsListResponse };
   "skills/extraRoots/set": { params: SkillsExtraRootsSetParams; response: SkillsExtraRootsSetResponse };
+  "plugin/reconcile": { params: PluginReconcileParams; response: PluginReconcileResponse };
   "app/list": { params: AppsListParams; response: AppsListResponse };
   "mcpServerStatus/list": { params: ListMcpServerStatusParams; response: ListMcpServerStatusResponse };
   "thread/start": { params: ThreadStartParams; response: ThreadStartResponse };

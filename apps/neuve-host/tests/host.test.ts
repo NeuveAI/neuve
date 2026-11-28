@@ -1185,7 +1185,7 @@ test("expected lane and pull acquisition refusals remain info outcomes through t
 	const realGit = Bun.which("git");
 	if (!realGit) throw new Error("Missing fixture Git");
 	const tools = join(at.root, "tools"); await mkdir(tools);
-	await writeFile(join(tools, "git"), '#!/bin/sh\nif [ "$3" = fetch ]; then\n  echo "Fixture refused network acquisition" >&2\n  exit 1\nfi\nexec "$NEUVE_TEST_REAL_GIT" "$@"\n', { mode: 0o755 });
+	await writeFile(join(tools, "git"), '#!/bin/sh\ncase " $* " in *" fetch "*)\n  echo "Fixture refused network acquisition" >&2\n  exit 1;;\nesac\nexec "$NEUVE_TEST_REAL_GIT" "$@"\n', { mode: 0o755 });
 	const oldPath = process.env.PATH, oldGit = process.env.NEUVE_TEST_REAL_GIT;
 	process.env.PATH = `${tools}:${oldPath ?? ""}`; process.env.NEUVE_TEST_REAL_GIT = realGit;
 	try {

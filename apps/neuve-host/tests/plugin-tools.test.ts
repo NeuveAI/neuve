@@ -1,16 +1,74 @@
 import { expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Channel, type Fields } from "@ace/channel";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
-import { MemoryStorage } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools, type ToolResultMessage } from "@earendil-works/pi-ai";
+import { CompactionEntry, MemoryStorage, type Conversation, type Harness } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Effect } from "effect";
 
-import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
-import { policy } from "../../../packages/harness/src/chat-runtime/transcript";
+import { Fixture, MODEL, OWNER } from "../../../packages/channel/tests/helpers";
+import { policy, policyKey } from "../../../packages/harness/src/chat-runtime/transcript";
 import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
-import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
+import { chromeDevToolsPlugin, expandPluginValue, PluginManifest, secretName } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
+import { config } from "../src/config";
+
+test("Chrome DevTools resolves both host folders without a credential and alone gets a workspace argument", async () => {
+	const home = config.home;
+	const plugin = {
+		...chromeDevToolsPlugin,
+		servers: { ...chromeDevToolsPlugin.servers, plain: { type: "stdio" as const, command: "plain-server", args: ["--identify"] } },
+	};
+	const plugins = pluginTools(() => {}, [plugin], () => ({}));
+	try {
+		config.home = "/Volumes/Example Drive/ace";
+		const folder = realpathSync(import.meta.dir);
+		expect(chromeDevToolsPlugin.variables.size).toBe(0);
+		expect(chromeDevToolsPlugin.credentials.size).toBe(0);
+		expect(secretName("ACE_BROWSER_PROFILE")).toBe(false);
+		expect(plugins.nativeServers?.(folder)).toEqual({
+			"chrome-devtools": {
+				type: "stdio", command: "npx", args: [
+					"-y", "chrome-devtools-mcp@1.14.0", "--autoConnect", "--userDataDir",
+					join(config.home, "browser"), `--workspace=${folder}`,
+					"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
+				],
+				env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
+			},
+			plain: { type: "stdio", command: "plain-server", args: ["--identify"] },
+		});
+		expect(plugins.nativeServers?.()).toBeUndefined();
+		expect(plugins.nativeServers?.("/")).toBeUndefined();
+	} finally {
+		config.home = home;
+		await plugins.close();
+	}
+});
+
+test("the native session policy reopens when Chrome DevTools changes and withholds it for Plan and attended chats", async () => {
+	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
+	try {
+		const mcpServers = plugins.nativeServers?.(import.meta.dir);
+		const plan = { role: "system" as const, content: "", timestamp: 0,
+			[Symbol.for("neuve.chat.plan-request")]: true };
+		for (const ownTools of [true, false]) {
+			const configured = { folder: import.meta.dir, ownTools, mcpServers };
+			const handle = () => Effect.succeed({ text: "" });
+			const on = policy([], handle, undefined, configured);
+			const off = policy([], handle, undefined, { ...configured, mcpServers: undefined });
+			expect(on.mcpServers?.["chrome-devtools"]?.command).toBe("npx");
+			expect(policyKey(on)).not.toBe(policyKey(off));
+			expect(policy([plan], handle, undefined, configured).mcpServers).toBeUndefined();
+			expect(policy([], handle, undefined, { ...configured, attended: true }).mcpServers).toBeUndefined();
+		}
+	} finally {
+		await plugins.close();
+	}
+});
 
 // The parser supplies a settings label and limits expansion to the credentials declared in the files.
 test("the manifest resolves the display name and restricts expansion to resolved credentials", () => {
@@ -72,8 +130,169 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 `;
 
-// Exercise the prompt from a real channel request and the bridge policy that consumes it.
-test("connected plugin guidance reaches pi and the bridged policy only while its tools are offered", async () => {
+// An MCP peer asks for roots during initialization and returns the scope with an inline image.
+const screenshotServer = String.raw`
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const send = message => console.log(JSON.stringify({ jsonrpc: "2.0", ...message }));
+let roots;
+let pending;
+const workspace = process.argv.find(arg => arg.startsWith("--workspace="));
+const screenshot = (id, { oversized }) => {
+	const data = oversized ? Buffer.alloc(900_001).toString("base64") : "aA==";
+	const scope = {
+		roots,
+		workspace,
+		noUpdateChecks: process.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS,
+		hasPath: Boolean(process.env.PATH),
+	};
+	send({ id, result: { content: [
+		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify(scope) },
+	] } });
+};
+for await (const line of createInterface({ input: process.stdin })) {
+	const { id, method, params, result } = JSON.parse(line);
+	if (method === "initialize") {
+		roots = params.capabilities.roots ? null : [];
+		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" },
+			instructions: "Use Chrome DevTools for browser work.",
+		} });
+	} else if (method === "notifications/initialized") {
+		if (roots === null) send({ id: "roots", method: "roots/list" });
+	} else if (id === "roots") {
+		roots = result.roots;
+		if (pending !== undefined) screenshot(...pending);
+	} else if (method === "tools/list") {
+		send({ id, result: { tools: [{
+			name: "take_screenshot", inputSchema: { type: "object", properties: { oversized: { type: "boolean" } } },
+		}] } });
+	} else if (method === "tools/call") {
+		appendFileSync("devtools-calls.log", params.name + "\n");
+		if (roots === null) pending = [id, params.arguments];
+		else screenshot(id, params.arguments);
+	}
+}
+`;
+
+const devtoolsServer = chromeDevToolsPlugin.servers["chrome-devtools"];
+const workspaceArg = devtoolsServer?.type === "stdio" && devtoolsServer.args?.find(arg => arg.startsWith("--workspace="));
+if (!workspaceArg) throw new Error("Missing the DevTools workspace argument");
+const screenshotPlugin = PluginManifest.parse({
+	manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
+	mcp: {
+		"chrome-devtools": {
+			...devtoolsServer,
+			command: process.execPath,
+			args: ["--no-env-file", "--eval", screenshotServer, "--", workspaceArg],
+		},
+	},
+});
+
+const screenshotText = (folder: string) => JSON.stringify({
+	roots: [{ uri: pathToFileURL(folder).href }], workspace: `--workspace=${folder}`,
+	noUpdateChecks: "1", hasPath: true,
+});
+async function screenshotTurn(channel: Fixture, mode: "ace" | "plan", attended: boolean, args?: { oversized?: boolean }) {
+	const tool = "chrome-devtools_take_screenshot";
+	const search = "plugin_tool_search";
+	const offer = Promise.withResolvers<{ offered: boolean; searchable: boolean; listed: boolean }>();
+	const blocks = Promise.withResolvers<ToolResultMessage["content"] | undefined>();
+	channel.script(request => {
+		const tools = getCurrentTools(request.messages).map(candidate => candidate.name);
+		offer.resolve({
+			offered: tools.includes(tool), searchable: tools.includes(search),
+			listed: getCurrentSystemPrompt(request.messages).includes(`\`${tool}\``),
+		});
+		if (args && !attended) return fauxAssistantMessage(
+			fauxToolCall(search, { query: `select:${tool}` }, { id: "find-screenshot" }), { stopReason: "toolUse" },
+		);
+		return args
+			? fauxAssistantMessage(fauxToolCall(tool, args, { id: "screenshot" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Done");
+	});
+	if (args && !attended) channel.script(request => {
+		expect(getCurrentTools(request.messages).map(candidate => candidate.name)).toContain(tool);
+		return fauxAssistantMessage(fauxToolCall(tool, args, { id: "screenshot" }), { stopReason: "toolUse" });
+	});
+	if (args) channel.script(request => {
+		const result = request.messages.findLast(item => item.role === "toolResult");
+		blocks.resolve(result?.content);
+		return fauxAssistantMessage("Done");
+	});
+	const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode, attended });
+	expect(await channel.request({ op: "wait", submission })).toBe("done");
+	return { ...await offer.promise, result: args ? await blocks.promise : undefined };
+}
+
+test("pi discovers scoped Chrome DevTools and delivers images and the chat's roots", async () => {
+	let preference: Record<string, boolean> = {};
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => preference);
+	const channel = await Fixture.create({ plugins });
+	try {
+		expect(await screenshotTurn(channel, "ace", false, {})).toEqual({
+			offered: false, searchable: true, listed: true,
+			result: [
+				{ type: "image", data: "aA==", mimeType: "image/png" },
+				{ type: "text", text: screenshotText(channel.lane.path) },
+			],
+		});
+		const attended = await screenshotTurn(channel, "ace", true, {});
+		const calls = await Bun.file(join(channel.lane.path, "devtools-calls.log")).text();
+		expect({ ...attended, calls }).toEqual({
+			offered: false, searchable: false, listed: false,
+			result: [{ type: "text", text: "This tool is unavailable in a person-driven chat." }],
+			calls: "take_screenshot\n",
+		});
+		const hidden = { offered: false, searchable: false, listed: false, result: undefined };
+		expect(await screenshotTurn(channel, "plan", false)).toEqual(hidden);
+		preference = { "chrome-devtools": false };
+		expect(plugins.nativeServers?.(channel.lane.path)).toBeUndefined();
+		expect(await screenshotTurn(channel, "ace", false)).toEqual(hidden);
+	} finally {
+		await channel.dispose();
+	}
+});
+
+test("pi drops an oversized plugin image and keeps the text with a filePath hint", async () => {
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => ({}));
+	const channel = await Fixture.create({ plugins });
+	try {
+		const { result } = await screenshotTurn(channel, "ace", false, { oversized: true });
+		expect(result?.map(block => block.type)).toEqual(["text"]);
+		expect(result).toEqual([{
+			type: "text",
+			text: screenshotText(channel.lane.path)
+				+ "\nAn image was too large to include. Save it to a file with filePath.",
+		}]);
+	} finally {
+		await channel.dispose();
+	}
+});
+
+// Codex announces its native server tools itself, while Ace still supplies the plugin's guidance.
+test("the Codex Chrome DevTools section keeps guidance without a tool list", async () => {
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => ({}));
+	const model = { ...MODEL, provider: "fixture-codex" };
+	const codex = fauxProvider({ provider: model.provider, api: "neuve-runtime", models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+	const channel = await Fixture.create({ plugins, ownTools: provider => provider === model.provider });
+	try {
+		channel.scripted.models.setProvider(codex.provider);
+		let prompt = "";
+		codex.appendResponses([request => {
+			prompt = getCurrentSystemPrompt(request.messages);
+			return fauxAssistantMessage("Done");
+		}]);
+		const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode: "ace", model });
+		expect(await channel.request({ op: "wait", submission })).toBe("done");
+		expect(prompt).toContain("## Plugin: chrome-devtools\nFixture\n\n### MCP Server Instructions\n\n#### chrome-devtools\n\n> Use Chrome DevTools for browser work.");
+		expect(prompt).not.toContain("### Tools");
+		expect(prompt).not.toContain("Use Codex's tool discovery");
+	} finally {
+		await channel.dispose();
+	}
+});
+
+test("plugin sections give each runtime its discovery guidance", async () => {
 	const apiKey = "fixture-tracker-key";
 	let instructions = `Use find_issue to look up a ticket by ID.\nProvider detail: ${apiKey}`;
 	let enabled = true;
@@ -84,7 +303,7 @@ test("connected plugin guidance reaches pi and the bridged policy only while its
 		if (id === undefined) return new Response(null, { status: 202 });
 		const result = method === "initialize"
 			? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tracker", version: "1" }, instructions }
-			: { tools: [{ name: "find_issue", description: "Find a ticket by ID.", inputSchema: { type: "object" } }] };
+			: { tools: [{ name: "find_issue", description: "Find a ticket by ID. This sentence is omitted.", inputSchema: { type: "object" } }] };
 		return Response.json({ jsonrpc: "2.0", id, result });
 	});
 	const plugin = PluginManifest.parse({
@@ -99,11 +318,15 @@ test("connected plugin guidance reaches pi and the bridged policy only while its
 	try {
 		const channel = chat = await Fixture.create({
 			plugins,
+			ownTools: provider => provider === "fixture-codex",
 			planning: async () => ({ kind: "failure", reason: "unavailable", message: "Fixture planning." }),
 		});
-		async function ask(mode: "ace" | "plan" = "ace") {
+		async function ask(mode: "ace" | "plan" = "ace", provider?: "fixture-claude" | "fixture-codex") {
+			const model = provider ? { ...MODEL, provider } : MODEL;
+			const native = provider && fauxProvider({ provider, api: "neuve-runtime", models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+			if (native) channel.scripted.models.setProvider(native.provider);
 			const prompt = Promise.withResolvers<{ pi: string; bridge: string; offered: string[]; served: string[] }>();
-			channel.script(request => {
+			(native || channel.faux).appendResponses([request => {
 				const bridged = policy(request.messages, () => Effect.succeed({ text: "" }), undefined, {
 					ownTools: true, pluginTools: plugins.httpTools(),
 				});
@@ -113,8 +336,8 @@ test("connected plugin guidance reaches pi and the bridged policy only while its
 					served: bridged.tools.map(tool => tool.name),
 				});
 				return fauxAssistantMessage("Done");
-			});
-			const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the tool offer", mode });
+			}]);
+			const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the tool offer", mode, model });
 			expect(await channel.request({ op: "wait", submission })).toBe("done");
 			return prompt.promise;
 		}
@@ -124,16 +347,28 @@ test("connected plugin guidance reaches pi and the bridged policy only while its
 			"> Use find_issue to look up a ticket by ID.", "> Provider detail: [redacted]",
 		].join("\n");
 		const first = await ask();
-		expect(first.offered).toContain("tracker_find_issue");
-		expect(first.served).toContain("tracker_find_issue");
+		expect(first.offered).toContain("plugin_tool_search");
+		expect(first.offered).not.toContain("tracker_find_issue");
+		expect(first.served).not.toContain("tracker_find_issue");
 		for (const prompt of [first.pi, first.bridge]) {
 			expect(prompt).toContain(expected);
+			expect(prompt).toContain("- `tracker_find_issue` Find a ticket by ID.");
+			expect(prompt).not.toContain("This sentence is omitted.");
 			expect(prompt).not.toContain(apiKey);
 		}
+		const list = `${expected}\n\n### Tools\n\n- \`tracker_find_issue\` Find a ticket by ID.`;
+		expect(first.pi).toContain(`${list}\n\nUse \`plugin_tool_search\` to load these tools before calling them.`);
+		const claude = (await ask("ace", "fixture-claude")).pi;
+		expect(claude).toContain(expected);
+		expect(claude).not.toContain("### Tools");
+		expect(claude).not.toContain("Use `ToolSearch`");
+		const codex = (await ask("ace", "fixture-codex")).pi;
+		expect(codex).toContain(`${list}\n\nUse Codex's tool discovery to load tools from the \`neuve_plugins\` server on demand.`);
 		const plan = await ask("plan");
 		expect(plan.offered).toContain("planning_issue");
 		expect(plan.pi).toContain("Linear planning tools read scope and dependencies.");
 		expect(plan.offered).not.toContain("tracker_find_issue");
+		expect(plan.offered).not.toContain("plugin_tool_search");
 		expect(plan.pi).not.toContain("Fixture Tracker");
 		expect(plan.bridge).not.toContain("Fixture Tracker");
 		expect((await ask()).pi).toContain(expected);
@@ -141,6 +376,7 @@ test("connected plugin guidance reaches pi and the bridged policy only while its
 		enabled = false;
 		const off = await ask();
 		expect(off.offered).not.toContain("tracker_find_issue");
+		expect(off.offered).not.toContain("plugin_tool_search");
 		expect(off.served).not.toContain("tracker_find_issue");
 		expect(off.pi).not.toContain("Fixture Tracker");
 		expect(off.bridge).not.toContain("Fixture Tracker");
@@ -193,6 +429,10 @@ test("a running channel discovers, dispatches, and hides a plugin at the next re
 	async function ask(mode: "ace" | "plan" = "ace", call?: string) {
 		let offered: string[] = [];
 		let result: unknown;
+		if (call) fake.appendResponses([fauxAssistantMessage(
+			fauxToolCall("plugin_tool_search", { query: "select:fixture_write_issue,fixture_" + "r".repeat(44) }, { id: crypto.randomUUID() }),
+			{ stopReason: "toolUse" },
+		)]);
 		fake.appendResponses([request => {
 			offered = getCurrentTools(request.messages).map(tool => tool.name).filter(name => name.startsWith("fixture_"));
 			if (call) return fauxAssistantMessage([
@@ -309,7 +549,7 @@ test.each([
 		async function ask() {
 			const offer = Promise.withResolvers<string[]>();
 			fake.appendResponses([request => {
-				offer.resolve(getCurrentTools(request.messages).map(tool => tool.name).filter(name => name.startsWith("pending_")));
+				offer.resolve(getCurrentSystemPrompt(request.messages).includes("`pending_answer`") ? ["pending_answer"] : []);
 				return fauxAssistantMessage("Done");
 			}]);
 			const response = await opened.handle({ op: "ask", author: "owner", text: "Say hello" }, () => {});
@@ -411,6 +651,7 @@ test("an expired HTTP session is replaced without restarting the channel or retr
 			expect(await channel.request({ op: "wait", submission })).toBe("done");
 			return call ? watch.until("result", event => event.call === call) : undefined;
 		}
+		channel.script(fauxAssistantMessage(fauxToolCall("plugin_tool_search", { query: "select:session_answer" }, { id: "session-search" }), { stopReason: "toolUse" }));
 		expect((await ask("First call", "before-expiry"))?.text).toBe("Answered in session 1");
 		session = undefined;
 		const failed = await ask("Expired call", "expired");
@@ -422,6 +663,114 @@ test("an expired HTTP session is replaced without restarting the channel or retr
 		await watch.stop();
 	} finally {
 		await chat?.dispose();
+		await endpoint.stop(true);
+	}
+});
+
+// Exercise query ranking, durable discovery after a restart and a real compaction, and current availability.
+test("pi replays searches across restarts and compaction and drops disabled results", async () => {
+	const schema = { type: "object", properties: { id: { type: "string" } }, required: ["id"] };
+	const endpoint = serveOAuthFixture(async request => {
+		if (request.method === "GET") return new Response(null, { status: 405 });
+		const { id, method, params } = await request.json();
+		if (id === undefined) return new Response(null, { status: 202 });
+		const result = method === "initialize"
+			? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "tracker", version: "1" } }
+			: { tools: [
+				{ name: "browse", description: "Find tickets and links.", inputSchema: schema },
+				{ name: "find_tickets", description: "Look up an issue.", inputSchema: schema },
+				{ name: "write_ticket", description: "Change a ticket.", inputSchema: schema },
+				{ name: "find_project", description: "Look up a project.", inputSchema: schema },
+				...Array.from({ length: 5 }, (_, index) => ({ name: `extra_${index}`, description: "Find tickets.", inputSchema: schema })),
+			] };
+		return Response.json({ jsonrpc: "2.0", id, result });
+	});
+	const plugin = PluginManifest.parse({
+		manifest: { name: "tracker", description: "Track work." },
+		mcp: { tracker: { type: "http", url: endpoint.url.href, headers: { Authorization: "Bearer fixture" } } },
+	});
+	let enabled = true;
+	const connect = () => pluginTools(() => {}, [plugin], () => ({ tracker: enabled }));
+	let fixture: Fixture | undefined;
+	let harness: Harness | undefined;
+	let root: Conversation | undefined;
+	try {
+		const chat = fixture = await Fixture.create({
+			plugins: connect(),
+			extension: { extensions: [], async attach(session) { harness = session; root = await session.root(context); } },
+		});
+		async function ask(text = "Check the tracker") {
+			const { submission } = await chat.request<{ submission: number }>({ op: "ask", author: OWNER, text });
+			const status = await chat.request({ op: "wait", submission });
+			const errors = chat.log.filter(item => item.level === "error");
+			expect(status, JSON.stringify(errors)).toBe("done");
+		}
+		const query = (id: string, args: { query: string; max_results?: number }) =>
+			fauxAssistantMessage(fauxToolCall("plugin_tool_search", args, { id }), { stopReason: "toolUse" });
+		chat.script(
+			fauxAssistantMessage([
+				fauxToolCall("tracker_find_tickets", { id: "fixture" }, { id: "early" }),
+				fauxToolCall("plugin_tool_search", { query: "find +tickets" }, { id: "keywords" }),
+			], { stopReason: "toolUse" }),
+			request => {
+				expect(request.messages.find(message => message.role === "toolResult" && message.toolCallId === "early"))
+					.toMatchObject({ isError: true });
+				const result = request.messages.find(message => message.role === "toolResult" && message.toolCallId === "keywords");
+				expect(result).toMatchObject({
+					details: ["tracker_find_tickets", "tracker_browse", "tracker_extra_0", "tracker_extra_1", "tracker_extra_2"],
+				});
+				expect(result?.role === "toolResult" && result.content[0]).toEqual({
+					type: "text",
+					text: JSON.stringify({ name: "tracker_find_tickets", description: "Look up an issue.", parameters: schema }),
+				});
+				expect(getCurrentTools(request.messages).map(tool => tool.name)).toContain("tracker_find_tickets");
+				return query("exact", { query: "select:missing,tracker_write_ticket,tracker_extra_4", max_results: 1 });
+			},
+			request => {
+				const result = request.messages.findLast(message => message.role === "toolResult");
+				expect(result).toMatchObject({ details: ["tracker_write_ticket"] });
+				expect(getCurrentTools(request.messages).map(tool => tool.name)).not.toContain("tracker_extra_4");
+				return fauxAssistantMessage("Loaded.");
+			},
+		);
+		await ask();
+
+		chat.options.plugins = connect();
+		await chat.restart();
+		chat.script(request => {
+			expect(getCurrentTools(request.messages).map(tool => tool.name)).toContain("tracker_write_ticket");
+			return fauxAssistantMessage("Recovered.");
+		});
+		await ask("Recent context. ".repeat(8_000));
+
+		if (!root || !harness) throw new Error("Fixture did not open a conversation");
+		chat.script(fauxAssistantMessage("A summary with no tool names."));
+		const compacting = await root.compact(undefined, context);
+		expect((await harness.waitForTask(compacting, context)).state.outcome.status).toBe("completed");
+		const compacted = await root.context(context);
+		expect(CompactionEntry.is(compacted.head)).toBe(true);
+		expect(compacted.messages.some(message => message.role === "toolResult" && message.toolCallId === "exact")).toBe(false);
+
+		chat.script(request => {
+			expect(getCurrentTools(request.messages).map(tool => tool.name)).toContain("tracker_write_ticket");
+			return query("before-disable", { query: "select:tracker_write_ticket" });
+		}, fauxAssistantMessage("Still loaded."));
+		await ask();
+
+		enabled = false;
+		chat.script(request => {
+			expect(getCurrentSystemPrompt(request.messages)).not.toContain("Track work.");
+			expect(getCurrentTools(request.messages).map(tool => tool.name)).not.toContain("tracker_write_ticket");
+			expect(request.messages.find(message => message.role === "toolResult" && message.toolCallId === "before-disable"))
+				.toMatchObject({ details: [], content: [{ type: "text", text: expect.stringContaining("unavailable") }] });
+			return query("disabled", { query: "select:tracker_write_ticket" });
+		}, request => {
+			expect(request.messages.findLast(message => message.role === "toolResult")).toMatchObject({ details: [] });
+			return fauxAssistantMessage("Unavailable.");
+		});
+		await ask();
+	} finally {
+		await fixture?.dispose();
 		await endpoint.stop(true);
 	}
 });

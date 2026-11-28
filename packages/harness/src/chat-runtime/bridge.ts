@@ -99,8 +99,10 @@ type Generation = {
   /** The chat's own folder, from its agent: where a runtime with its own tools works. */
   folder?: string | undefined;
   /** Channel policy for this request. Keep its temporary tool offer out of continuation digests. */
-  planRequest?: SystemMessage;
+  toolOffer?: SystemMessage;
   pluginTools?: ReadonlySet<string>;
+  mcpServers?: SessionPolicy["mcpServers"];
+  deferredTools?: ReadonlySet<string>;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -115,12 +117,14 @@ const unsafeContinuation =
 const planningRequest = Symbol.for("neuve.chat.plan-request");
 
 const sandboxPluginTools = Symbol.for("neuve.chat.sandbox-plugin-tools");
+const nativePluginServers = Symbol.for("neuve.chat.native-plugin-servers");
+const deferredPluginTools = Symbol.for("neuve.chat.deferred-plugin-tools");
 
 function offeredMessages(
   generation: Generation,
 ): readonly Context["messages"][number][] {
-  const { messages, planRequest } = generation;
-  return planRequest ? [...messages, planRequest] : messages;
+  const { messages, toolOffer } = generation;
+  return toolOffer ? [...messages, toolOffer] : messages;
 }
 
 type HeldCall = {
@@ -316,10 +320,11 @@ export class ChatRuntimeBridge {
     const requested = normalizeContext(context).messages;
     const pluginTools: unknown =
       options && Reflect.get(options, sandboxPluginTools);
-    const planRequest = requested.find(
+    const deferredTools: unknown =
+      options && Reflect.get(options, deferredPluginTools);
+    const toolOffer = requested.find(
       (message): message is SystemMessage =>
-        message.role === "system" &&
-        Reflect.get(message, planningRequest) === true,
+        message.role === "system" && Object.hasOwn(message, planningRequest),
     );
     const attendance = requested.findLast(
       (message): message is SystemMessage =>
@@ -327,7 +332,7 @@ export class ChatRuntimeBridge {
         Object.hasOwn(message.sections ?? {}, ATTENDED_SECTION),
     );
     const messages = requested.filter(
-      (message) => message !== planRequest && message !== attendance,
+      (message) => message !== toolOffer && message !== attendance,
     );
     const identity = messages
       .map((message) => this.identities.get(message))
@@ -341,6 +346,10 @@ export class ChatRuntimeBridge {
       this.subscribe(known, stream, options?.signal);
       return stream;
     }
+    const nativeServers:
+      ((folder?: string) => SessionPolicy["mcpServers"]) | undefined =
+      options && Reflect.get(options, nativePluginServers);
+    const mcpServers = nativeServers?.(identity?.folder);
     const generation: Generation = {
       settled: false,
       selection,
@@ -356,8 +365,10 @@ export class ChatRuntimeBridge {
       streams: [],
       messages,
       ...(identity?.folder === undefined ? {} : { folder: identity.folder }),
-      ...(planRequest === undefined ? {} : { planRequest }),
+      ...(toolOffer === undefined ? {} : { toolOffer }),
       ...(pluginTools instanceof Set ? { pluginTools } : {}),
+      ...(mcpServers === undefined ? {} : { mcpServers }),
+      ...(deferredTools instanceof Set ? { deferredTools } : {}),
       cleanup: [],
       message: {
         role: "assistant",
@@ -674,6 +685,8 @@ export class ChatRuntimeBridge {
         skills: this.options.skills,
         ownTools: route.capabilities.ownTools,
         pluginTools: gen.pluginTools,
+        mcpServers: gen.mcpServers,
+        deferredTools: gen.deferredTools,
         approvals: route.capabilities.approvals,
         attended: gen.attended,
       },
@@ -930,6 +943,8 @@ export class ChatRuntimeBridge {
           skills,
           ownTools: route.capabilities.ownTools,
           pluginTools: gen.pluginTools,
+          mcpServers: gen.mcpServers,
+          deferredTools: gen.deferredTools,
           approvals: route.capabilities.approvals,
           attended: gen.attended,
         },
@@ -1262,8 +1277,14 @@ export class ChatRuntimeBridge {
     live.retryRequest = message;
     live.logicalTurn ??= crypto.randomUUID();
     live.lastResumePoint = undefined;
-    const folder = live.policy.folder;
-    const access = live.generation?.planRequest ? "read-only" : "write";
+    const folder = live.route.capabilities.ownTools
+      ? live.policy.folder
+      : undefined;
+    const offer = live.generation?.toolOffer;
+    const access =
+      offer && Reflect.get(offer, planningRequest) === true
+        ? "read-only"
+        : "write";
     await this.command(
       live,
       live.state.session.startTurn({

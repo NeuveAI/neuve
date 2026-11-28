@@ -385,6 +385,8 @@ test.each(["SDK lookup", "permission callback"] as const)(
       Effect.gen(function* () {
         yield* session.startTurn({ turnId: "one", message: "Read my issue" });
         const child = f.children[0]!;
+        expect(child.options.tools).toEqual([]);
+        expect(child.options.allowedTools).not.toContain("ToolSearch");
         const sessionId = (yield* session.continuation).sessionId;
         const block = {
           type: "tool_use" as const,
@@ -682,3 +684,98 @@ test("round 2 non-JSON permission input produces a typed failure and denial", ()
       }),
     { ...policy, tools: [readTool], approvalPolicy: "ask" },
   ));
+
+test.each(["a deferred Neuve tool", "a native MCP tool"] as const)(
+  "Claude Code can search for %s",
+  (target) =>
+    run(
+      (f, session, _, next) =>
+        Effect.gen(function* () {
+          yield* session.startTurn({ turnId: "one", message: "Find an issue" });
+          const child = f.children[0]!;
+          expect(child.options.tools).toEqual(["ToolSearch"]);
+          expect(child.options.allowedTools).toContain("ToolSearch");
+          expect(child.options.env?.ENABLE_TOOL_SEARCH).toBe("true");
+          const input = {
+            query:
+              target === "a native MCP tool"
+                ? "select:mcp__chrome-devtools__take_screenshot"
+                : "select:mcp__neuve__linear_get_issue",
+          };
+          const permission = yield* Effect.promise(() =>
+            child.options.canUseTool!("ToolSearch", input, {
+              signal: new AbortController().signal,
+              toolUseID: "search",
+              requestId: "fixture",
+            }),
+          );
+          expect(permission).toEqual({
+            behavior: "allow",
+            updatedInput: input,
+          });
+          const sessionId = (yield* session.continuation).sessionId;
+          const toolUse = assistant(undefined);
+          toolUse.session_id = sessionId;
+          toolUse.message.stop_reason = "tool_use";
+          toolUse.message.content = [
+            { type: "tool_use", name: "ToolSearch", id: "search", input },
+          ];
+          yield* Queue.offerAll(child.frames, [
+            toolUse,
+            {
+              type: "user",
+              parent_tool_use_id: null,
+              session_id: sessionId,
+              uuid: crypto.randomUUID(),
+              message: {
+                role: "user",
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "search",
+                    content: "Found the tool.",
+                  },
+                ],
+              },
+            },
+            result({ session_id: sessionId }),
+          ]);
+          expect(yield* next()).toMatchObject({
+            outcome: { status: "completed" },
+          });
+        }),
+      {
+        ...policy,
+        outputSchema: undefined,
+        ...(target === "a native MCP tool"
+          ? {
+              mcpServers: {
+                "chrome-devtools": { type: "stdio" as const, command: "npx" },
+              },
+            }
+          : {
+              tools: [
+                {
+                  name: "linear_get_issue",
+                  description: "Read a Linear issue.",
+                  inputSchema: { type: "object" },
+                  deferred: true,
+                  hints: {
+                    readOnly: true,
+                    destructive: false,
+                    idempotent: true,
+                    openWorld: false,
+                  },
+                  handle: () => Effect.succeed({ text: "fixture" }),
+                },
+              ],
+            }),
+      },
+      {
+        environment: {
+          ENABLE_TOOL_SEARCH: "false",
+          ANTHROPIC_BASE_URL: "https://proxy.invalid",
+        },
+      },
+    ),
+);

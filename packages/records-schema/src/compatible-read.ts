@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 import { captureRefusal, type RefusedShape } from "./compatibility-refusals.ts";
-import { transformingInput } from "./reader-shapes.ts";
+import { schemaEdges, transformingInput } from "./reader-shapes.ts";
 
 /** Shared by synchronous readers and Effect's store notices. No payload values enter a notice. */
 const said = new Set<string>();
@@ -1019,6 +1019,54 @@ const strippedKeys = (
   return [];
 };
 
+const directParses = new WeakMap<z.core.$ZodType, boolean>();
+const parsesDirectly = (root: z.core.$ZodType): boolean => {
+  const cached = directParses.get(root);
+  if (cached !== undefined) return cached;
+  const seen = new Set<z.core.$ZodType>();
+  const visit = (schema: z.core.$ZodType): boolean => {
+    if (seen.has(schema)) return true;
+    seen.add(schema);
+    return schema._zod.def.type !== "pipe" && schemaEdges(schema).every(visit);
+  };
+  let direct = false;
+  try {
+    direct = visit(root);
+  } catch {
+    // Unclassified schemas keep the schema walk.
+  }
+  directParses.set(root, direct);
+  return direct;
+};
+
+const keysSurvive = (input: unknown, output: unknown, depth = 0): boolean => {
+  if (input === null || typeof input !== "object")
+    return typeof input !== "function" && Object.is(input, output);
+  if (depth === 64 || output === null || typeof output !== "object")
+    return false;
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.getPrototypeOf(output)) return false;
+  if (Array.isArray(input) || Array.isArray(output)) {
+    if (
+      prototype !== Array.prototype ||
+      !Array.isArray(input) ||
+      !Array.isArray(output)
+    )
+      return false;
+  } else if (prototype !== Object.prototype && prototype !== null) return false;
+  return Reflect.ownKeys(input).every((key) => {
+    const before = Object.getOwnPropertyDescriptor(input, key);
+    const after = Object.getOwnPropertyDescriptor(output, key);
+    return (
+      before !== undefined &&
+      "value" in before &&
+      after !== undefined &&
+      "value" in after &&
+      keysSurvive(before.value, after.value, depth + 1)
+    );
+  });
+};
+
 const noteDivergence = (
   branches: ReadonlyArray<Branch>,
   refusals: RefusedShape[],
@@ -1203,7 +1251,13 @@ const readCompatible = <T>(
     };
   };
   if (strict.success)
-    return result(strict, strippedKeys(schema, input, strict.data));
+    return result(
+      strict,
+      // A surviving key cannot be a drop. Pipes and codecs can restore a key lost in an inner parse.
+      parsesDirectly(schema) && keysSurvive(input, strict.data)
+        ? []
+        : strippedKeys(schema, input, strict.data),
+    );
   const refusals: RefusedShape[] = [];
   const inspectDrops = (
     drops: ReadonlyArray<Drop>,

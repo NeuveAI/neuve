@@ -62,10 +62,12 @@ async function memoryChannel(options: Partial<Options> = {}) {
 test("only planning requests tell the agent to deliver a plan or revision with one standalone call", async () => {
 	const run = await memoryChannel({ planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes } });
 	const prompts: string[] = [];
+	const tools: string[][] = [];
 	try {
 		for (const mode of ["plan", "ace"] satisfies ChatMode[]) {
 			run.fake.appendResponses([request => {
 				prompts.push(getCurrentSystemPrompt(request.messages));
+				tools.push(getCurrentTools(request.messages).map(tool => tool.name));
 				return fauxAssistantMessage("Ready");
 			}]);
 			expect(await run.wait(await run.ask({ mode }))).toBe("done");
@@ -73,6 +75,8 @@ test("only planning requests tell the agent to deliver a plan or revision with o
 		const instruction = "When ready, deliver the full plan or revision in one `plan_write` call on its own. That ends the turn.";
 		expect(prompts[0]).toContain(instruction);
 		expect(prompts[1]).not.toContain(instruction);
+		expect(tools[0]).toContain("plan_write");
+		expect(tools[1]).not.toContain("plan_write");
 	} finally {
 		await run.channel.close();
 	}

@@ -28,7 +28,6 @@ export type Review = (handoff: ReviewHandoff) => Promise<ReviewReceipt>;
  */
 async function loose(cwd: string): Promise<{ head: string; paths: number }> {
 	const result = await git(cwd, [
-		"--no-optional-locks",
 		"status",
 		"--porcelain=v2",
 		"--branch",

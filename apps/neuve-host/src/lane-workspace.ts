@@ -146,13 +146,13 @@ async function stopProcess(recorded: Ancestry.ProcessIdentity | undefined, monit
 	}
 }
 
-async function runWorkerCommand(command: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<number> {
+async function runCommand(command: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<number> {
 	return Bun.spawn(command, {
 		...options, stdin: "ignore", stdout: "ignore", stderr: "ignore", killSignal: "SIGKILL",
 	}).exited;
 }
 
-async function stopWorkspaceWorkers(scratch: string, run: typeof runWorkerCommand): Promise<void> {
+async function stopWorkspaceWorkers(scratch: string, run: typeof runCommand): Promise<void> {
 	const binary = join(scratch, "bin", "neuve");
 	const environment = laneWorkspaceEnvironment(scratch);
 	const project = environment.NEUVE_WORKSPACE_PROJECT;
@@ -187,6 +187,16 @@ async function stopWorkspaceWorkers(scratch: string, run: typeof runWorkerComman
 	}
 }
 
+async function clearWorkspaceKeychain(scratch: string, run: typeof runCommand): Promise<void> {
+	const { ACE_KEYCHAIN_SERVICE: service } = laneWorkspaceEnvironment(scratch);
+	const command = ["/usr/bin/security", "delete-generic-password", "-s", service];
+	const options = { cwd: scratch, env: process.env, timeout: 15_000 };
+	let status = 0;
+	while (status === 0) status = await run(command, options);
+	// security exits with 44 when no matching item remains.
+	if (status !== 44) throw new Error(`Could not clear keychain entries for workspace ${scratch}. security exited with code ${status}.`);
+}
+
 async function removeWorkspaceScratch(state: LaneWorkspace): Promise<void> {
 	const { scratch } = state;
 	try {
@@ -212,7 +222,14 @@ async function removeWorkspaceScratch(state: LaneWorkspace): Promise<void> {
 	}
 }
 
-export async function stopLaneWorkspace(root: string, scratch: string, monitor = processes, run = runWorkerCommand, closeTab = closeWorkspaceTab): Promise<boolean> {
+export async function stopLaneWorkspace(
+	root: string,
+	scratch: string,
+	monitor = processes,
+	run = runCommand,
+	closeTab = closeWorkspaceTab,
+	runKeychain = process.platform === "darwin" ? runCommand : undefined,
+): Promise<boolean> {
 	if (!await readLaneWorkspace(root, scratch)) return false;
 	return withLaneWorkspace(scratch, async () => {
 		let state = await readLaneWorkspace(root, scratch);
@@ -228,6 +245,7 @@ export async function stopLaneWorkspace(root: string, scratch: string, monitor =
 		await stopWorkspaceWorkers(scratch, run);
 		const { browser } = state;
 		if (browser?.target) await closeTab(browser.profile, browser.target);
+		if (runKeychain) await clearWorkspaceKeychain(scratch, runKeychain);
 		await removeWorkspaceScratch(state);
 		return true;
 	});

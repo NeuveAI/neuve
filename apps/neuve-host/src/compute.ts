@@ -5,6 +5,7 @@
  */
 import { realpathSync } from "node:fs";
 
+import type { GitCommand } from "@ace/channel/git";
 import type { ModelRef } from "@ace/channel/protocol";
 
 import * as catalog from "./catalog";
@@ -61,7 +62,7 @@ export function listed(lanes: Unready[]): string {
 	return lanes.map((lane) => `${lane.name} (${lane.problem})`).join(", ");
 }
 
-async function output(dir: string, args: string[]): Promise<string> {
+async function output(dir: string, args: GitCommand): Promise<string> {
 	const result = await git(dir, args);
 	if (result.status !== 0) {
 		throw new Error(`git ${args[0]} failed: ${result.stderr.trim() || `exit ${result.status}`}`);

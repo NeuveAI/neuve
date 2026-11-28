@@ -18,7 +18,7 @@ import {
 	settled,
 	store,
 } from "./keys";
-import { carriedPlugins, type Plugin } from "./plugin-manifest";
+import { carriedPlugins, pluginEnabled, type Plugin } from "./plugin-manifest";
 import { log } from "./log";
 import { pluginOAuth, type PluginOAuth } from "./plugin-oauth";
 import { defaultModel, models, parseModel } from "./manage";
@@ -71,7 +71,7 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 				)
 			),
 		),
-		Promise.all(carriedPlugins.map(plugin => pluginSettings(plugin, enabled[plugin.name] === true, fresh))),
+		Promise.all(carriedPlugins.map(plugin => pluginSettings(plugin, pluginEnabled(plugin, enabled), fresh))),
 		extendModels(available(catalog.models)).catch((error: Error) => error),
 		defaultModel(catalog.models).catch(() => undefined),
 	]);

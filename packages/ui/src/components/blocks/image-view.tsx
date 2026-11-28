@@ -11,13 +11,15 @@ import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
 import { cell, DEFAULT_H, DEFAULT_W, GRID_GAP, type Item, type Picture } from "./image-layout";
 
 function ImageView(
-	{ src, w, h, alt, width, fit: objectFit = "cover" }: {
+	{ src, w, h, alt, width, fit: objectFit = "cover", cors }: {
 		src: string;
 		w: number;
 		h: number;
 		alt: string;
 		width: number;
 		fit?: "cover" | "contain";
+		/** Load it as a CORS request, without credentials, so the page may read it back. */
+		cors?: boolean;
 	},
 ) {
 	let scale = Math.min(1, width / w);
@@ -44,11 +46,13 @@ function ImageView(
 		<ImageOpen
 			src={src}
 			alt={alt}
+			cors={cors}
 			style={{ inlineSize: fit, maxInlineSize: "100%", blockSize: height, contain: "strict" }}
 		>
 			<img
 				src={src}
 				alt={alt}
+				crossOrigin={cors ? "anonymous" : undefined}
 				className="size-full rounded-lg squircle shadow-[inset_0_0_0_1px_rgb(0_0_0/0.14)] dark:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.12)]"
 				style={{ objectFit }}
 			/>
@@ -137,17 +141,18 @@ function GridImage(
  * context menu, whose "Open Image in New Window" has no window to open.
  */
 function ImageOpen(
-	{ src, alt, style, children }: {
+	{ src, alt, cors, style, children }: {
 		src: string;
 		alt: string;
+		cors?: boolean;
 		style: CSSProperties;
 		children: ReactNode;
 	},
 ) {
 	let [open, setOpen] = useState(false);
 	let [actual, setActual] = useState(false);
-	// Only inline images can be read back without the source's CORS consent.
-	let inline = src.startsWith("data:");
+	// Inline and root-relative (same-origin) images can be read back; another origin's only with its CORS consent.
+	let readable = cors || src.startsWith("data:") || (src.startsWith("/") && !src.startsWith("//"));
 	let show = () => {
 		setActual(false);
 		setOpen(true);
@@ -169,16 +174,16 @@ function ImageOpen(
 						<IconExpand />
 						Open Image
 					</ContextMenuItem>
-					{inline && <CopyImage src={src} />}
+					{readable && <CopyImage src={src} />}
 				</ContextMenuContent>
 			</ContextMenu>
 			<Dialog open={open} onOpenChange={setOpen}>
 				<DialogContent className="top-4 w-fit max-w-[calc(100vw-2rem)] p-0 [--dialog-top:1rem] sm:max-w-[calc(100vw-2rem)]">
 					<DialogTitle className="sr-only">{alt || "Image"}</DialogTitle>
-					{/* Remote images have no items, so the menu stays closed and only the native one is suppressed. */}
-					<ContextMenu disabled={!inline}>
+					{/* Cross-origin images have no items, so the menu stays closed and only the native one is suppressed. */}
+					<ContextMenu disabled={!readable}>
 						<ContextMenuTrigger
-							render={<img src={src} alt={alt} />}
+							render={<img src={src} alt={alt} crossOrigin={cors ? "anonymous" : undefined} />}
 							className={actual
 								? "max-w-none cursor-zoom-out"
 								: "max-h-[calc(100dvh-2rem)] max-w-[calc(100vw-2rem)] cursor-zoom-in"}

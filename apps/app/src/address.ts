@@ -52,3 +52,6 @@ export const chosen = deployed ? stored() : undefined;
 export const gateway: string | undefined = deployed
 	? chosen && `wss://${chosen}/ws`
 	: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+
+/** The host's origin for its HTTP routes, such as tool images; empty when the host serves this page. */
+export const origin = deployed && chosen ? `https://${chosen}` : "";

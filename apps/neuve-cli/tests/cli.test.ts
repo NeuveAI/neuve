@@ -64,7 +64,7 @@ import type {
 } from "../src/domain.ts";
 import { collectPublicQueryResult, runQueryGraph } from "../src/graph-query.ts";
 import { execute as executeRecords, withStore } from "../src/records-cli.ts";
-import { codingWorkerSetup } from "../src/workspace-cli.ts";
+import { codingWorkerSetup } from "../src/workspace-worker.ts";
 import { markSetUp } from "./fixtures/set-up.ts";
 
 // Built into a temporary directory, never dist/neuve, which an installed
