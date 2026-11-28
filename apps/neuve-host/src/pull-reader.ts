@@ -97,8 +97,8 @@ export class PullReaders {
 				}
 				if (changed) this.changed?.(repo, branch);
 				if (!signal.aborted && (state.pull === null || open(state.pull))) {
-					const pending = state.pull === null || !!state.error || state.pull.state === "draft"
-						|| state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending");
+					const pending = !state.error && (state.pull === null || state.pull.state === "draft"
+						|| state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending"));
 					reader.timer = setTimeout(() => void this.#read(reader), pending ? this.cadence.pending : this.cadence.idle);
 				}
 				return { kind: "succeeded", value: undefined };

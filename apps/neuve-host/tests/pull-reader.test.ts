@@ -191,7 +191,7 @@ test("a watched branch recovers after its first read fails", async () => {
 		}
 		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch, "open", true));
 	});
-	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10_000 });
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10_000, idle: 10 });
 	try {
 		const card = updates(readers, branch);
 		await until(() => card.values.at(-1)?.pull?.state === "draft");
