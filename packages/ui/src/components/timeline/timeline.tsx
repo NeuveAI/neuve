@@ -617,6 +617,11 @@ function find(items: TimelineItem[], uid: string) {
 	return -1;
 }
 
+/** A row's identity as older rows arrive above it: a group keeps its newest message when older ones join it. */
+function rowKey(item: TimelineItem): string | undefined {
+	return item.kind === "event" ? item.row.uid : item.kind === "group" ? item.group.rows.at(-1)?.uid : undefined;
+}
+
 function finalWorkingIds(items: TimelineItem[]): string[] {
 	let ids: string[] = [];
 	for (let item of items) {
@@ -1337,6 +1342,8 @@ type TimelineProps =
 		onDelete?: (uid: string) => void;
 		/** Called when the user uses terminal command row actions. */
 		onExecAction?: (action: TimelineExecAction, exec: TimelineExec) => void;
+		/** Called with the visible row range whenever it changes; row 0 is the oldest. */
+		onRangeChange?: (range: ScrollViewRange) => void;
 		/** Called when the viewport-visible message IDs or bottom-pinned state changes. */
 		onVisibilityChange?: (visibility: TimelineVisibility) => void;
 		/** Imperative scroll handle (forwarded from the underlying ScrollView). */
@@ -1382,6 +1389,7 @@ function useTimeline(
 		onEdit,
 		onDelete,
 		onExecAction,
+		onRangeChange,
 		onVisibilityChange,
 		ref,
 		onClickCapture,
@@ -1733,7 +1741,10 @@ function useTimeline(
 		blocks,
 		openGroups,
 		visibleWorking,
-		setRange,
+		setRange: (value: ScrollViewRange) => {
+			setRange(value);
+			onRangeChange?.(value);
+		},
 		onScrollStart,
 		onScrollEnd,
 		onClick,
@@ -1838,6 +1849,7 @@ function Timeline(input: TimelineProps) {
 						itemHeight(timeline[i]!, blocks, Math.min(w, LANE), openGroups, visibleWorking)}
 					gap={GAP}
 					end={TAIL}
+					itemKey={(i) => rowKey(timeline[i]!)}
 					onRangeChange={setRange}
 					onScrollStart={onScrollStart}
 					onScrollEnd={onScrollEnd}

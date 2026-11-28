@@ -148,10 +148,10 @@ export function Conversation(
 	);
 	const approvals = useMemo(
 		() =>
-			shownApprovals(transcript.approvals, transcript.items).map((request) =>
+			shownApprovals(transcript.approvals, transcript.items, transcript.older).map((request) =>
 				approvalView(request, (author) => author === user ? "you" : people[author] || author)
 			),
-		[transcript.approvals, transcript.items, user, people],
+		[transcript.approvals, transcript.items, transcript.older, user, people],
 	);
 	const sends = useMemo(() => commentSends(transcript.planComments), [transcript.planComments]);
 	const said = useMemo(
@@ -457,7 +457,11 @@ export function Conversation(
 											const source = senders.get(sender);
 											return source && (() => onOpen(source));
 										}}
-										intro={{ name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
+										// The first row says the channel was created only once the chat's start is loaded.
+										intro={transcript.older
+											? undefined
+											: { name: channel.name, createdAt: Math.floor(channel.created / 1000) }}
+										onRangeChange={(range) => range.start === 0 && transcript.more()}
 										// The Diff tab shows the channel's own chat, not an agent's beside it.
 										onFileOpen={beside ? undefined : diff}
 										onDiffFileOpen={beside ? undefined : diff}

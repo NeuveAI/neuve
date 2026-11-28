@@ -243,7 +243,7 @@ export const EventSchema = z.discriminatedUnion("kind", [
 		summary: text,
 		revision: id,
 	}),
-	z.object({ kind: z.literal("live"), ...base }),
+	z.object({ kind: z.literal("live"), ...base, older: z.literal(true).optional() }),
 	z.object({ kind: z.literal("typing"), ...base, author: text }),
 	z.object({ kind: z.literal("approval-requests"), ...base, requests: z.array(ApprovalRequestSchema) }),
 	z.object({ kind: z.literal("turn-retry-status"), ...base, status: TurnRetryStatusSchema.optional() }),

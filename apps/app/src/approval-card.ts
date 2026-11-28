@@ -229,12 +229,14 @@ export function approvalView(request: ApprovalRequest, name: (author: string) =>
 /**
  * The requests shown above the composer: every open one, and the settled ones of the latest turn.
  * A settled request goes once a later message starts a new turn; a request closed by a message
- * stays through the turn that message started, so the card still says who sent it.
+ * stays through the turn that message started, so the card still says who sent it. When `older`
+ * turns were left out of `items`, a settled request opened before them belongs to an earlier turn.
  */
-export function shownApprovals(requests: ApprovalRequest[], items: Item[]): ApprovalRequest[] {
+export function shownApprovals(requests: ApprovalRequest[], items: Item[], older = false): ApprovalRequest[] {
 	const asks = items.flatMap((item) => item.kind === "message" && item.invoked ? [item.at] : []);
 	return requests.filter((request) => {
 		if (request.state.kind === "open") return true;
+		if (older && request.openedAt < (items[0]?.at ?? Infinity)) return false;
 		const later = asks.filter((at) => at > request.openedAt).length;
 		return later === 0 || (request.state.kind === "closed" && request.state.reason === "message" && later === 1);
 	});
