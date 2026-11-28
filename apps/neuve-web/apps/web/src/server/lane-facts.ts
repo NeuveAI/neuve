@@ -226,6 +226,18 @@ const leading = (unit: DeskUnit): ReadonlySet<string> => {
   ])
 }
 
+/** A unit is excluded when any section is marked, with lockfiles first. */
+export const excludedSections = (
+  sections: ReadonlyArray<Pick<ReadSection, "excluded">>
+): Exclusion | undefined => {
+  const reasons = sections.flatMap((section) => {
+    const reason: unknown = section.excluded?.reason
+    return typeof reason === "string" ? [reason] : []
+  })
+  const reason = reasons.includes("lockfile") ? "lockfile" : reasons.at(0)
+  return reason === undefined ? undefined : { reason }
+}
+
 export const LANE_FACTS: LaneFacts = {
   // Presence of `sections[n].undecided` on every section of a version 4
   // assessment (the cause is never read). When the sections or their
@@ -316,16 +328,5 @@ export const LANE_FACTS: LaneFacts = {
   // people on the unit, oldest first. None for a `packet.published@1` unit.
   carriedDecisions: (unit) =>
     "carriedDecisions" in unit ? unit.carriedDecisions : [],
-  // `sections[n].excluded.reason`, when any section of the unit has one:
-  // an open set (a lockfile, a file the repository declares generated, and
-  // the published lists' marks to come), a lockfile's first. What fired a
-  // mark is not read until Records records it.
-  excluded: (unit) => {
-    const reasons = readSections(unit).flatMap((section) => {
-      const reason: unknown = section.excluded?.reason
-      return typeof reason === "string" ? [reason] : []
-    })
-    const reason = reasons.includes("lockfile") ? "lockfile" : reasons.at(0)
-    return reason === undefined ? undefined : { reason }
-  },
+  excluded: (unit) => excludedSections(readSections(unit)),
 }
