@@ -19,27 +19,27 @@ import { host } from "./host";
 function create(draft: boolean) {
 	return `Open a ${
 		draft ? "draft " : ""
-	}pull request for this lane's work: commit what belongs in it, then land it with \`lane push\` and \`gh pr create${
+	}pull request for this lane's work: commit what belongs in it, then push its branch with \`git push -u origin <branch>\` and run \`gh pr create${
 		draft ? " --draft" : ""
 	}\`, following this repository's instructions and pull request template.`;
 }
 
 function fix(pull: GithubPull, failed: GithubCheck[]) {
 	const names = failed.map((check) => check.name).join(", ");
-	return `Checks failed on #${pull.number}: ${names}. Find the cause in their logs, fix it in this lane, and push the fix with \`lane push\`.`;
+	return `Checks failed on #${pull.number}: ${names}. Find the cause in their logs, fix it in this lane, and push the fix with \`git push -u origin <branch>\`.`;
 }
 
 const ASKS: Record<Exclude<Ask, "create">, (pull: number) => string> = {
 	commit: () =>
 		"Commit this lane's uncommitted work, following this repository's commit conventions. Leave out anything that doesn't belong, and don't push.",
 	push: () =>
-		"Push this branch's commits to its remote, with `lane push` in a lane and `git push` otherwise, following this repository's instructions. Don't open a pull request.",
+		"Push this branch's commits with `git push`, or `git push -u origin <branch>` if it has no upstream yet, following this repository's instructions. Don't open a pull request.",
 	update: (pull) =>
-		`Update #${pull} with this lane's work: commit what belongs in it, then push with \`lane push\`, following this repository's instructions.`,
+		`Update #${pull} with this lane's work: commit what belongs in it, then push with \`git push -u origin <branch>\`, following this repository's instructions.`,
 	rebase: () =>
-		"Rebase this lane onto the latest of its base: `git fetch origin`, rebase, resolve any conflicts, and check the result still builds. If the lane has an open pull request, push with `lane push`.",
+		"Rebase this lane onto the latest of its base: `git fetch origin`, rebase, resolve any conflicts, and check the result still builds. If the lane has an open pull request, push with `git push --force-with-lease -u origin <branch>`.",
 	review: (pull) =>
-		`#${pull} has changes requested. Read its reviews and review comments with \`gh\`, address them in this lane, and push with \`lane push\`.`,
+		`#${pull} has changes requested. Read its reviews and review comments with \`gh\`, address them in this lane, and push with \`git push -u origin <branch>\`.`,
 	ready: (pull) => `Mark #${pull} ready for review with \`gh pr ready\`.`,
 	merge: (pull) =>
 		`Merge #${pull} with \`gh pr merge\`, following this repository's instructions for merging. If GitHub refuses, say why.`,
@@ -64,7 +64,7 @@ function dirty(changes: Changes) {
 
 /**
  * Git and pull request actions for a chat's lane. Each one asks the chat's agent, which works in
- * the lane and lands it through lane, so a click never pushes past `lane push` or the repository's
+ * the lane and pushes its branch with plain Git, so a click never bypasses the repository's
  * own pull request instructions. They're offered only while the agent could take the request now.
  */
 export function useGit(channel: Listing, chat: number, user: string) {

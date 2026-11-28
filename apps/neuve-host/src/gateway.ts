@@ -44,7 +44,7 @@ import {
 import * as peers from "./peers";
 import { pluginOAuth } from "./plugin-oauth";
 import { authorizePluginRefresh, PLUGIN_REFRESH_PATH } from "./plugin-oauth-client";
-import { compute as computeSettings, folder, savePlugins } from "./preferences";
+import { folder, savePlugins } from "./preferences";
 import * as projects from "./projects";
 import {
 	channelProject,
@@ -71,6 +71,7 @@ import {
 	setDirectory,
 	setFolder,
 	setKey,
+	setLanePreferences,
 	setModel,
 	setPluginKey,
 	settings,
@@ -827,6 +828,7 @@ async function handle(
 			if (request.model !== undefined) await setModel(request.model);
 			if (request.compute) await setCompute(request.compute);
 			if (request.folder !== undefined) setFolder(request.folder);
+			await setLanePreferences(request);
 			if (request.plugins !== undefined) savePlugins(request.plugins);
 			return settingsChanged();
 		case "key-store":
@@ -905,7 +907,7 @@ async function handle(
 			return record;
 		}
 		case "compute":
-			return computeSettings();
+			return compute.computeSettings();
 		case "folder":
 			return folder();
 		case "compute-start":
@@ -937,7 +939,7 @@ async function handle(
 			moves.add(request.channel);
 			try {
 				// A move to a cloud workspace ends by starting it, which the app must wait out like Run in
-				// cloud before it opens the chat; the agent's lane push before it stays watchable.
+				// cloud before it opens the chat. The agent's run to push the branches stays watchable.
 				await move(
 					request.channel,
 					request.target,

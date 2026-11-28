@@ -8,7 +8,6 @@ export type RuntimeHooks = {
 	nativeSources?: import("./native-source-lifecycle").NativeSources;
 	worker?: WorkerSetup;
 	modelAvailability?(): readonly import("@ace/channel/protocol").ModelRef[];
-	lanes?(id: string): string;
 	host?: HostOptions;
 	checkAccounts?(): Promise<void>;
 	listening?(port: number): void;

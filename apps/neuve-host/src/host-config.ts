@@ -24,8 +24,12 @@ const directory = (name: string) =>
 	);
 
 export function inside(path: string, dir: string): boolean {
-	return path === dir || path.startsWith(`${dir}/`);
+	return path === dir || path.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 }
+
+export const LanesDirectory = directory("lanes");
+export const separateDirectories = (first: string, second: string) =>
+	!inside(first, second) && !inside(second, first);
 
 /**
  * Git's repository-local variables, as `git rev-parse --local-env-vars` lists them (Git 2.54). A
@@ -70,7 +74,7 @@ export const HostConfigSchema = z.strictObject({
 	/** Default clone destination parent from the validated storage profile. */
 	projects: directory("projects").optional(),
 	/** Existing directory under the validated worktrees root: `<lanes>/<channel id>/<lane>`. */
-	lanes: directory("lanes"),
+	lanes: LanesDirectory,
 	/** The owner's author name, which every request the host relays is stamped with. */
 	user: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._@-]*$/).refine(
 		(user) => !user.startsWith("agent@"),
@@ -99,7 +103,7 @@ export const HostConfigSchema = z.strictObject({
 	/** Native close, including any injected finalization, before the host reports failure. */
 	workerCloseTimeoutMs: z.int().positive().default(10_000),
 }).refine(
-	({ home, lanes }) => !inside(lanes, home) && !inside(home, lanes),
+	({ home, lanes }) => separateDirectories(home, lanes),
 	"The host's home and lanes directories must be separate",
 );
 
@@ -128,7 +132,7 @@ export function configure(value: unknown): HostConfig {
 	const parsed = HostConfigSchema.safeParse(value);
 	if (!parsed.success) throw new Error(`Invalid host configuration\n${z.prettifyError(parsed.error)}`);
 	for (const key of Object.keys(config)) Reflect.deleteProperty(config, key);
-	configureRuntime({lanes: (id) => join(parsed.data.lanes, id), workerCloseTimeoutMs: parsed.data.workerCloseTimeoutMs});
+	configureRuntime({workerCloseTimeoutMs: parsed.data.workerCloseTimeoutMs});
 	const { ACE_CONFIG_HOME: settings, ACE_KEYCHAIN_SERVICE: keychain } = workspaceSettingsEnvironment(parsed.data.home, parsed.data.environment);
 	Object.assign(ace, { app: parsed.data.app || originalApp, settings, keychain, home: parsed.data.home, user: parsed.data.user, port: parsed.data.port, webPort: parsed.data.webPort ?? originalWebPort, worker: parsed.data.worker });
 	for (const name of GIT_LOCAL) delete process.env[name];

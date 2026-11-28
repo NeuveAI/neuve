@@ -53,6 +53,7 @@ See [0002](decisions/0002-event-driven-processes.md) for the process model and [
 | [0015](decisions/0015-range-snapshot-and-git-reader.md) | A review reads a range snapshot that the Git reader makes; hunk text comes from Git rather than durable records. Accepted as the reference; not built. |
 | [0016](decisions/0016-shared-work.md) | Work more than one caller can ask for runs once per idempotency key, and every other caller subscribes to its response. The only design for it; not built across processes. |
 | [0017](decisions/0017-runtime-contract-and-accounts.md) | Named accounts and isolated runtime loops, with shared tools and stage policy. Claude stages are enabled; account removal and file-watch gaps stay explicit. |
+| [0018](decisions/0018-work-lanes.md) | Every work lane lives in its channel's lanes folder on `<prefix>/<name>`, is found from Git's worktree list, is pushed with plain Git and is removed without force. Where a lane starts when given no base is open. |
 
 ## Keeping these records true
 

@@ -10,10 +10,12 @@ import * as catalog from "../src/catalog";
 import { assign } from "../src/channel-create";
 import { unready } from "../src/compute";
 import { configure, bindConfiguredCatalog } from "../src/host-config";
-import { archive } from "../src/manage";
+import { archive, remove } from "../src/manage";
 import { open as openLog } from "../src/log";
 import { GatewayClient } from "../src/private-gateway-client";
+import type { Settings } from "../src/protocol";
 import { nativeHandoff } from "../src/review";
+import { setLanePreferences } from "../src/settings";
 import { startHost } from "./fixture-host";
 import { plantNested } from "../../../packages/channel/tests/helpers";
 
@@ -49,6 +51,49 @@ function owned(record: catalog.Listing, name = `chat-${ROOT_CONVERSATION_ID}`) {
 	return lane;
 }
 
+test("lane preferences choose new worktree locations and branch namespaces without moving old lanes", async () => {
+	const { record, root, lanes, project, home } = await local();
+	const old = await assign(record);
+	const oldPath = join(lanes, old.id, "work");
+	expect(old.lane?.path).toBe(oldPath);
+	expect(old.lanes).toBe(lanes);
+	delete old.lanes;
+	catalog.write(old);
+	const custom = join(root, "custom");
+	await mkdir(custom);
+	await expect(setLanePreferences({ lanesFolder: home })).rejects.toThrow("separate from the host's state folder");
+	await expect(setLanePreferences({ lanesFolder: root })).rejects.toThrow("separate from the host's state folder");
+	await expect(setLanePreferences({ lanesFolder: project })).rejects.toThrow("outside Git checkouts");
+	await expect(setLanePreferences({ lanesFolder: "relative" })).rejects.toThrow("Enter a full folder path");
+	await expect(setLanePreferences({ lanesFolder: join(custom, "missing") })).rejects.toThrow("Choose an existing directory");
+	await setLanePreferences({ lanesFolder: custom, branchPrefix: "Agent_ops.1" });
+	await expect(setLanePreferences({ branchPrefix: "bad/prefix" })).rejects.toThrow("Enter a valid Git branch prefix");
+	await expect(setLanePreferences({ branchPrefix: "bad..prefix" })).rejects.toThrow("Enter a valid Git branch prefix");
+	const next = await assign(catalog.create(project, undefined, "fresh"));
+	const path = join(custom, next.id, "work");
+	expect(next.lane?.path).toBe(path);
+	expect(git(path, "branch", "--show-current")).toBe("Agent_ops.1/fresh/work");
+	git(project, "branch", "Agent_ops.1/release/old-work");
+	expect(catalog.create(project, undefined, "release").prefix).toBe("Agent_ops.1/release-2");
+	const worktrees = () => git(project, "worktree", "list", "--porcelain");
+	expect(worktrees()).toContain(`worktree ${oldPath}`);
+	await remove(old.id);
+	expect(existsSync(oldPath)).toBe(false);
+	expect(worktrees()).not.toContain(`worktree ${oldPath}`);
+	expect(worktrees()).toContain(`worktree ${path}`);
+
+	await setLanePreferences({ branchPrefix: "blocked" });
+	git(project, "branch", "blocked");
+	expect(() => catalog.create(project, undefined, "blocked-channel"))
+		.toThrow("The project already has a branch named blocked, so choose a different branch prefix");
+	await setLanePreferences({ lanesFolder: "", branchPrefix: "" });
+	const cleared = await assign(catalog.create(project, undefined, "cleared"));
+	expect(cleared.lane?.path).toBe(join(lanes, cleared.id, "work"));
+	expect(git(join(lanes, cleared.id, "work"), "branch", "--show-current")).toBe("cleared/work");
+	await remove(next.id);
+	expect(existsSync(path)).toBe(false);
+});
+
 test("archive removes only host-created clean chat worktrees, retains refs/history and repeats safely", async () => {
 	const { record } = await local();
 	const lane = owned(record);
@@ -83,9 +128,11 @@ test("review, compute and archive never run a nested repository's settings", asy
 	await rm(join(lane.path, "loose"), { recursive: true });
 	const reviewed = await review().catch((error: Error) => error.message);
 
-	const cloud = join(record.project, ".lane", "trees", record.prefix, "cloud");
+	const cloud = join(catalog.paths(record.id).lanes, "cloud");
 	git(record.project, "worktree", "add", "-qb", `${record.prefix}/cloud`, cloud, lane.base);
 	git(record.project, "remote", "add", "origin", record.project);
+	git(lane.path, "push", "-u", "origin", lane.branch);
+	git(cloud, "push", "-u", "origin", `${record.prefix}/cloud`);
 	await mkdir(join(root, "cloud"));
 	const cloudPlant = await plantNested(cloud, join(root, "cloud"));
 	await rm(join(cloud, "loose"), { recursive: true });
@@ -98,6 +145,59 @@ test("review, compute and archive never run a nested repository's settings", asy
 	expect(reviewed).toMatchObject({ head, base: lane.base, cwd: lane.path });
 	expect(moving).toEqual([]);
 	expect(archived).toBe(true);
+});
+
+test("a cloud move reports an unpushed work lane in the channel's lanes folder", async () => {
+	const { record, project, root } = await local();
+	const origin = join(root, "origin.git");
+	git(root, "init", "--bare", origin);
+	git(project, "remote", "add", "origin", origin);
+	const name = "release-fix";
+	const branch = `${record.prefix}/${name}`;
+	const path = join(catalog.paths(record.id).lanes, name);
+	git(project, "worktree", "add", "-b", branch, path, "HEAD");
+	git(path, "push", "-u", "origin", branch);
+	git(path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "lane work");
+
+	expect(await unready(record)).toEqual([{ name, path, branch, problem: "not pushed" }]);
+});
+
+test("delete removes clean lanes and keeps dirty work and all branches", async () => {
+	const { record, home, project } = await local();
+	{
+		const clean = owned(record);
+		const folder = catalog.paths(record.id).lanes;
+		const explicitPath = join(folder, "build-example");
+		const explicitBranch = `${record.prefix}/build-example`;
+		git(project, "worktree", "add", "-b", explicitBranch, explicitPath, "HEAD");
+		const dirtyPath = join(folder, "release-fix");
+		const dirtyBranch = `${record.prefix}/release-fix`;
+		git(project, "worktree", "add", "-b", dirtyBranch, dirtyPath, "HEAD");
+		git(project, "config", "status.showUntrackedFiles", "no");
+		const draft = join(dirtyPath, "draft.txt");
+		await writeFile(draft, "uncommitted work");
+
+		await remove(record.id);
+
+		expect(catalog.owns(record.id)).toBe(false);
+		expect(existsSync(clean.path)).toBe(false);
+		expect(existsSync(explicitPath)).toBe(false);
+		const worktrees = git(project, "worktree", "list", "--porcelain");
+		expect(worktrees).not.toContain(`worktree ${clean.path}`);
+		expect(worktrees).not.toContain(`worktree ${explicitPath}`);
+		expect(worktrees).toContain(`worktree ${dirtyPath}`);
+		expect(await readFile(draft, "utf8")).toBe("uncommitted work");
+		for (const branch of [clean.branch, explicitBranch, dirtyBranch]) {
+			expect(git(project, "rev-parse", `refs/heads/${branch}`)).toBe(clean.base);
+		}
+		const logs = (await readFile(join(home, "logs/host.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+		expect(logs).toContainEqual(expect.objectContaining({
+			event: "chat.lane.retained",
+			channel: record.id,
+			path: dirtyPath,
+			error: expect.stringContaining("untracked"),
+		}));
+	}
 });
 
 for (const reason of ["dirty", "locked", "changed registration"] as const) test(`archive honestly retains ${reason} lanes with a warning`, async () => {
@@ -129,6 +229,8 @@ test("a caller-supplied explicit chat-* worktree is not host disposal authority"
 
 test("native catalog creation reaches shell/files on first worker turn; archive/unarchive restores work, history and the Diff base", async () => {
 	const place = await setup();
+	const custom = join(place.root, "custom");
+	await mkdir(custom);
 	const script = join(place.root, "s.json");
 	await writeFile(script, JSON.stringify([
 		{ tool: "bash", args: { command: "pwd; git branch --show-current; git rev-parse --git-common-dir" }, id: "first-shell" },
@@ -141,7 +243,7 @@ test("native catalog creation reaches shell/files on first worker turn; archive/
 	await writeFile(`${script}.cursor`, "0");
 	const host = await startHost({ models: () => [{ provider: "faux", modelId: "coder", efforts: ["off"] }], config: {
 		home: place.home, lanes: place.lanes, user: "owner", port: 0,
-		environment: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), NEUVE_TEST_SCRIPT: script },
+		environment: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), ACE_CONFIG_HOME: join(place.home, "settings"), NEUVE_TEST_SCRIPT: script },
 		worker: [process.execPath, "--preload", join(import.meta.dir, "fixtures/memory-secrets.ts"), ...(process.env.NEUVE_TEST_TSCONFIG ? ["--tsconfig-override", process.env.NEUVE_TEST_TSCONFIG] : []), join(import.meta.dir, "worker.ts")],
 	} });
 	const client = new GatewayClient(host.url, host.token);
@@ -151,15 +253,21 @@ test("native catalog creation reaches shell/files on first worker turn; archive/
 			const stop = client.subscribe(() => { if (client.status === "open") { stop(); resolve(); } });
 			if (client.status === "open") { stop(); resolve(); }
 		});
+		expect(await client.request<Settings>({ op: "settings" })).toMatchObject({ lanesFolder: place.lanes, branchPrefix: "" });
+		await client.request({ op: "preferences", lanesFolder: custom, branchPrefix: "worker.Test" });
+		expect(await client.request<Settings>({ op: "settings" })).toMatchObject({ lanesFolder: custom, branchPrefix: "worker.Test" });
 		// The CLI's native `ace new` writes the catalog, not the extension create path.
 		record = catalog.create(place.project, undefined, "ordinary");
 		expect(record.lane).toBeUndefined();
+		await client.request({ op: "preferences", lanesFolder: "", branchPrefix: "" });
 		const before = { head: git(place.project, "rev-parse", "HEAD"), index: await readFile(join(place.project, ".git/index")), status: git(place.project, "status", "--porcelain") };
 		const events: Event[] = [];
 		await client.channel(record.id, { op: "watch", queue: true, progress: true }, { event: value => events.push(value) });
 		const { submission } = await client.channel<{ submission: number }>(record.id, { op: "ask", author: "owner", text: "First write-capable turn" });
 		expect(await client.channel(record.id, { op: "wait", submission })).toBe("done");
 		const lane = catalog.read(record.id).chatLanes![`chat-${ROOT_CONVERSATION_ID}`]!;
+		expect(lane.path).toBe(join(custom, record.id, `chat-${ROOT_CONVERSATION_ID}`));
+		expect(git(lane.path, "branch", "--show-current")).toBe(`worker.Test/ordinary/chat-${ROOT_CONVERSATION_ID}`);
 		expect(lane.base).toBe(before.head);
 		expect((await client.channel<Changes>(record.id, { op: "changes" })).against).toBe("refs/heads/main");
 		expect(JSON.stringify(events.filter(event => event.kind === "result"))).toContain(lane.path);

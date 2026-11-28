@@ -2,9 +2,13 @@ import {extendModels} from "./model-availability";
 import { ClaudeSubscriptionTokenRefused, isClaudeSubscriptionToken } from "../../../packages/harness/src/subscription-token.ts";
 import type { ModelRef } from "@ace/channel/protocol";
 import { available } from "@ace/channel/models";
+import { isBranchPrefix } from "@ace/channel/git";
+import { homedir } from "node:os";
 
+import { computeSettings } from "./compute";
 import { config } from "./config";
 import * as directory from "./directory";
+import { config as host, LanesDirectory, separateDirectories } from "./host-config";
 import { rejection } from "./http";
 import {
 	forget,
@@ -24,14 +28,16 @@ import { pluginOAuth, type PluginOAuth } from "./plugin-oauth";
 import { defaultModel, models, parseModel } from "./manage";
 import { canonical } from "./move";
 import {
-	compute,
 	isModel,
+	lanePreferences,
 	preference,
 	pluginPreferences,
 	saveCompute,
 	saveFolder,
+	saveLanePreferences,
 	savePreference,
 } from "./preferences";
+import { git } from "./projects";
 import type { Compute, Invite, PluginSettings, ProviderId, Settings } from "./protocol";
 import * as tailnet from "./tailnet";
 
@@ -78,6 +84,7 @@ export async function settings(fresh?: boolean): Promise<Settings> {
 	return {
 		providers: statuses,
 		plugins,
+		...lanePreferences(),
 		model: preference(),
 		modelOverride: config.model ? parseModel(config.model) : undefined,
 		models: usable instanceof Error ? [] : usable,
@@ -264,16 +271,48 @@ export async function setCompute({ enabled, url }: Compute): Promise<void> {
 	if (typeof enabled !== "boolean") throw new Error("Turn cloud compute on or off");
 	const service = url?.trim() ? canonical(url.trim()) : null;
 	if (enabled && !service) throw new Error("Add the cloud compute service URL first");
-	if (service && service !== compute().url) await probe(service);
+	if (service && service !== computeSettings().url) await probe(service);
 	saveCompute({ enabled, url: service });
 }
 
-export function setFolder(value: string): void {
+function fullFolder(value: string, example: string): string {
 	const path = value.trim().replace(/(.)\/+$/, "$1");
 	if (!isValue(path) || !/^(?:~(?:\/|$)|\/)/.test(path)) {
-		throw new Error("Enter a full folder path, such as ~/code");
+		throw new Error(`Enter a full folder path, such as ${example}`);
 	}
-	saveFolder(path);
+	return path;
+}
+
+export function setFolder(value: string): void {
+	saveFolder(fullFolder(value, "~/code"));
+}
+
+export async function setLanePreferences({ lanesFolder, branchPrefix }: {
+	lanesFolder?: string;
+	branchPrefix?: string;
+}): Promise<void> {
+	if (lanesFolder === undefined && branchPrefix === undefined) return;
+	if (lanesFolder) {
+		const path = fullFolder(lanesFolder, "~/worktrees");
+		const expanded = path.startsWith("~") ? homedir() + path.slice(1) : path;
+		const directory = LanesDirectory.safeParse(expanded);
+		if (!directory.success) throw new Error("Choose an existing directory for work lanes");
+		lanesFolder = directory.data;
+		if (!separateDirectories(lanesFolder, host.home)) {
+			throw new Error("Choose a lanes folder separate from the host's state folder");
+		}
+		if ((await git(lanesFolder, ["rev-parse", "--git-dir"])).status === 0) {
+			throw new Error("Choose a lanes folder outside Git checkouts");
+		}
+	}
+	if (branchPrefix && (!isBranchPrefix(branchPrefix)
+		|| (await git(host.home, ["check-ref-format", "--branch", branchPrefix])).status !== 0)) {
+		throw new Error("Enter a valid Git branch prefix of 1 to 40 letters, digits, dots, underscores, or hyphens starting with a letter or digit");
+	}
+	saveLanePreferences({
+		...(lanesFolder === undefined ? {} : { lanesFolder }),
+		...(branchPrefix === undefined ? {} : { branchPrefix }),
+	});
 }
 
 function named(name: unknown): void {

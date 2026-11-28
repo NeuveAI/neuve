@@ -127,7 +127,7 @@ async function untracked(env: ExecutionEnv, cwd: string, context: Context) {
 
 /**
  * Commits past the branch's upstream, or past the fork point of a lane that has a remote but was
- * never pushed, since `lane push` sets the upstream.
+ * never pushed, since `git push -u` sets the upstream.
  */
 async function unpushed(
 	env: ExecutionEnv,

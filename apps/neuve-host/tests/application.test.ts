@@ -11,12 +11,14 @@ import {
 import { join } from "node:path";
 import { testTemporaryDirectory as tmpdir } from "./fixtures/temporary.ts";
 import { configure } from "../src/host-config";
+import { computeSettings } from "../src/compute";
 import { parseHostEnvelope, parseHostFrame } from "../src/parse";
 import { parseDescriptor, remote } from "../src/review-github";
 import * as projects from "../src/projects";
 import * as preferences from "../src/preferences";
 import { channelProject, checkoutId, projectId } from "../src/protocol";
 import { acquirePull } from "../src/review";
+import { setLanePreferences, settings } from "../src/settings";
 import raw from "./fixtures/github-pr-711.json";
 
 const paths: string[] = [];
@@ -56,7 +58,7 @@ async function place() {
 		projects: root,
 		user: "owner",
 		port: 0,
-		environment: env,
+		environment: { ...env, ACE_CONFIG_HOME: join(home, "settings") },
 		worker: [process.execPath],
 	});
 	return { root, home, lanes, project };
@@ -256,14 +258,24 @@ describe("Ace application host boundaries", () => {
 			}),
 		).rejects.toThrow("does not match");
 	});
-	test("restored preferences persist model, clone folder and compute settings", async () => {
+	test("preferences persist model, project folder, compute and work lane settings together", async () => {
 		const at = await place();
 		preferences.savePreference({provider: "openai", modelId: "actual-model"});
 		preferences.saveFolder(at.root);
 		preferences.saveCompute({enabled: true, url: "https://owned-fixture.invalid"});
+		const custom = join(at.root, "custom-lanes");
+		await mkdir(custom);
+		const update = {op: "preferences", lanesFolder: custom, branchPrefix: "ace.Team-1"};
+		const request = parseHostEnvelope(JSON.stringify({id: 1, ...update}), "owner");
+		expect(request).toEqual({id: 1, ...update});
+		if (request.op !== "preferences") throw new Error("Expected a preferences request");
+		await setLanePreferences(request);
+		expect(await settings()).toMatchObject({lanesFolder: custom, branchPrefix: "ace.Team-1"});
 		expect(preferences.preference()).toEqual({provider: "openai", modelId: "actual-model"});
 		expect(preferences.folder()).toBe(at.root);
-		expect(preferences.compute()).toEqual({enabled: true, url: "https://owned-fixture.invalid"});
+		expect(computeSettings()).toEqual({enabled: true, url: "https://owned-fixture.invalid"});
+		await setLanePreferences({lanesFolder: "", branchPrefix: ""});
+		expect(await settings()).toMatchObject({lanesFolder: at.lanes, branchPrefix: ""});
 	});
 	test("canonical project IDs join checkouts and frame parsing retains repository metadata", () => {
 		expect(

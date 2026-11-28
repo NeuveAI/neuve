@@ -41,9 +41,10 @@ export async function lane(
 ): Promise<{ name: string; path: string; base: string }> {
 	const against = await base(record.project, requested?.base || "HEAD");
 	if (!requested) {
-		const path = join(catalog.paths(record.id).lanes, FIRST_LANE);
+		const { lanes } = catalog.paths(record);
+		const path = join(lanes, FIRST_LANE);
 		const commit = await output(record.project, ["rev-parse", "--verify", "HEAD^{commit}"]);
-		mkdirSync(catalog.paths(record.id).lanes, { recursive: true });
+		mkdirSync(lanes, { recursive: true });
 		await output(record.project, [
 			"worktree",
 			"add",

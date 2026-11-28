@@ -1,4 +1,3 @@
-import { runtimeHooks } from "./runtime-hooks";
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -17,7 +16,8 @@ import { type Metadata, type ModelRef, type RunEnd, type Said, validateName } fr
 import { gitArgs } from "@ace/channel/git";
 
 import { config } from "./config";
-import { GIT_LOCAL } from "./host-config";
+import { config as host, GIT_LOCAL, inside } from "./host-config";
+import { lanePreferences } from "./preferences";
 import { identity } from "./tailnet";
 
 export type Listing = {
@@ -40,6 +40,8 @@ export type Listing = {
 	/** A library host-local channel, separate from every tailnet. */
 	local?: true;
 	project: string;
+	/** The lanes root chosen at creation; older channels use the host's configured root. */
+	lanes?: string;
 	model?: ModelRef;
 	/** A fork's starting lane, which its root chat records only when its pi state is created. */
 	lane?: { name: string; path: string; base: string };
@@ -102,18 +104,24 @@ export function dir(id: string): string {
 	return join(root, id);
 }
 
-export function paths(id: string) {
+export function paths(channel: string | Pick<Listing, "id" | "lanes">) {
+	const id = typeof channel === "string" ? channel : channel.id;
 	const base = dir(id);
+	const record = join(base, "channel.json");
 	return {
 		base,
-		record: join(base, "channel.json"),
+		record,
 		storage: join(base, "channel.sqlite"),
 		plans: join(base, "plans"),
 		socket: join(base, "channel.sock"),
 		pid: join(base, "worker.pid"),
 		lock: join(base, "worker.lock"),
 		log: join(base, "worker.log"),
-		lanes: runtimeHooks().lanes?.(id) || join(base, "lanes"),
+		get lanes(): string {
+			const saved = typeof channel === "string" ? (existsSync(record) ? read(id).lanes : undefined) : channel.lanes;
+			const directory = saved ?? host.lanes;
+			return directory ? join(directory, id) : join(base, "lanes");
+		},
 	};
 }
 
@@ -167,20 +175,31 @@ function unused(base: string, names: Set<string>, first = 2): string {
 	return name;
 }
 
-function lanePrefix(project: string, name: string, names: Set<string>): string {
+function lanePrefix(project: string, name: string, names: Set<string>, branchPrefix: string): string {
+	const namespace = branchPrefix ? `${branchPrefix}/` : "";
+	const reserved = namespace ? new Set<string>() : names;
+	if (namespace) {
+		for (const taken of names) {
+			if (taken.startsWith(namespace)) reserved.add(taken.slice(namespace.length));
+		}
+	}
 	// Cloud channels may have no checkout on this host.
 	if (existsSync(join(project, ".git"))) {
 		const env = { ...process.env };
 		for (const key of GIT_LOCAL) delete env[key];
-		const args = gitArgs(["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"]);
+		const args = gitArgs(["for-each-ref", "--format=%(refname:lstrip=2)", `refs/heads/${branchPrefix}`]);
 		const refs = Bun.spawnSync(["git", "-C", project, ...args], { env });
 		if (!refs.success) throw new Error(refs.stderr.toString().trim() || "Could not read the project's Git branches.");
 		for (const ref of refs.stdout.toString().trimEnd().split("\n")) {
-			const [prefix] = ref.split("/", 1);
-			if (prefix) names.add(prefix);
+			if (namespace && ref === branchPrefix) {
+				throw new Error(`The project already has a branch named ${branchPrefix}, so choose a different branch prefix`);
+			}
+			if (!ref.startsWith(namespace)) continue;
+			const [prefix] = ref.slice(namespace.length).split("/", 1);
+			if (prefix) reserved.add(prefix);
 		}
 	}
-	return unused(name, names);
+	return namespace + unused(name, reserved);
 }
 
 /**
@@ -244,15 +263,18 @@ export function draft(project: string, model?: ModelRef, name?: string, hosted?:
 	let chosen = name ? validateName(name) : random();
 	if (name && names.has(chosen)) throw new Error(`A channel named ${chosen} already exists`);
 	while (names.has(chosen)) chosen = random();
+	const { lanesFolder, branchPrefix } = lanePreferences();
+	if (lanesFolder && inside(lanesFolder, project)) throw new Error("Choose a lanes folder outside the project checkout");
 	const record: Listing = {
 		version: 2,
 		id: randomBytes(8).toString("hex"),
 		name: chosen,
-		prefix: lanePrefix(project, chosen, names),
+		prefix: lanePrefix(project, chosen, names, branchPrefix),
 		named: !!name,
 		owner: user,
 		...(local ? {local: true as const} : {tailnet}),
 		project,
+		...(lanesFolder ? { lanes: lanesFolder } : {}),
 		model,
 		created: Date.now(),
 		...(hosted ? { hosted } : {}),

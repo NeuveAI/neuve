@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 
 import { validateName } from "@ace/channel";
+import { isBranchPrefix } from "@ace/channel/git";
 import type { ModelRef } from "@ace/channel/protocol";
 import type { Snapshot } from "@ace/channel/transfer";
 import { credential } from "@ace/directory/credential";
@@ -276,6 +277,11 @@ export class Compute extends DurableObject<Env> {
 			}
 			if (!author?.name || !author.email) throw new Error("Author name and email are required");
 			const name = validateName(String(body.name || id));
+			const [first = "", second, extra] = String(body.prefix || name).trim().split("/");
+			if (extra !== undefined || (second !== undefined && !isBranchPrefix(first))) {
+				throw new Error("Enter a valid branch prefix for the channel");
+			}
+			const prefix = second === undefined ? validateName(first) : `${first}/${validateName(second)}`;
 			const project = action === "import" ? String(body.project) : "/workspace/project";
 			const settings: Settings = {
 				id,
@@ -289,7 +295,7 @@ export class Compute extends DurableObject<Env> {
 				version: 2,
 				id,
 				name,
-				prefix: validateName(String(body.prefix || name)),
+				prefix,
 				named: !!body.named,
 				owner: body.owner,
 				project,

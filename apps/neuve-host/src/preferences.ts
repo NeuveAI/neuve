@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { ModelRef } from "@ace/channel/protocol";
 
 import { config } from "./config";
-import * as directory from "./directory";
+import { config as host } from "./host-config";
 import { PluginPreferences } from "./plugin-manifest";
-import type { Compute } from "./protocol";
+import type { Compute, Settings } from "./protocol";
 
 export function isModel(value: unknown): value is ModelRef {
 	return typeof value === "object" && value !== null && "provider" in value && "modelId" in value
@@ -15,7 +15,8 @@ export function isModel(value: unknown): value is ModelRef {
 		&& typeof value.modelId === "string" && value.modelId.length > 0;
 }
 
-type Saved = { model?: ModelRef | null; compute?: Compute; folder?: string; plugins?: Record<string, boolean> };
+type LanePreferences = Pick<Settings, "lanesFolder" | "branchPrefix">;
+type Saved = Partial<LanePreferences> & { model?: ModelRef | null; compute?: Compute; folder?: string; plugins?: Record<string, boolean> };
 
 function saved(): Saved {
 	let text: string;
@@ -39,17 +40,22 @@ export function preference(): ModelRef | null {
 	return model;
 }
 
-/** A host's saved setting wins; otherwise the team's directory may name the service, which turns it on. */
-export function compute(): Compute {
-	const own = saved().compute;
-	if (own) return own;
-	const team = directory.read().compute;
-	return team ? { enabled: true, url: team } : { enabled: false, url: null };
+export function computePreference(): Compute | undefined {
+	return saved().compute;
 }
 
 /** Kept as entered, with `~` unexpanded, so the app shows and suggests paths the way people type them. */
 export function folder(): string {
 	return saved().folder || "~/code";
+}
+
+export function lanePreferences(): LanePreferences {
+	const { lanesFolder, branchPrefix } = saved();
+	return { lanesFolder: lanesFolder || host.lanes || "", branchPrefix: branchPrefix || "" };
+}
+
+export function saveLanePreferences(patch: Partial<LanePreferences>): void {
+	save(patch);
 }
 
 export function pluginPreferences(): Record<string, boolean> {

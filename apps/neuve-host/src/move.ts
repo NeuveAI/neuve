@@ -348,7 +348,7 @@ function request(lanes: Unready[]): string {
 			`- ${lane.name}, branch ${lane.branch}, at ${lane.path}: ${lane.problem}`
 		),
 		"",
-		"For each lane, commit its work if it has uncommitted changes, leaving out dependencies and build output such as node_modules, then run `lane push` in its worktree so its branch reaches origin. Don't open a pull request, and don't remove any lane. The move continues once this run ends with every lane pushed.",
+		"For each lane, commit its work if it has uncommitted changes, leaving out dependencies and build output such as node_modules, then run `git push -u origin <branch>` in its worktree with the branch listed above. Don't open a pull request, and don't remove any lane. The move continues once this run ends with every lane pushed.",
 	].join("\n");
 }
 

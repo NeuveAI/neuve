@@ -7,11 +7,11 @@ import type {ChannelInfo} from "@ace/channel";
 import {ExternalRefSchema} from "@ace/channel/external-ref";
 import {z} from "zod";
 
-export async function forkLane(project: string, branch: string, base: string, id: string, name: string): Promise<string> {
-	const directory = catalog.paths(id).lanes;
+export async function forkLane(record: catalog.Listing, base: string, name: string): Promise<string> {
+	const directory = catalog.paths(record).lanes;
 	await mkdir(directory, {recursive: true});
 	const path = join(directory, name);
-	const result = await git(project, ["worktree", "add", "-b", branch, path, base]);
+	const result = await git(record.project, ["worktree", "add", "-b", `${record.prefix}/${name}`, path, base]);
 	if (result.status !== 0) throw new Error(result.stderr || "Could not create the fork's lane");
 	return realpath(path);
 }
