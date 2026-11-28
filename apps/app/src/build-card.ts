@@ -165,8 +165,9 @@ export function buildView(
 			}
 			: {}),
 		...(review ? { review } : {}),
-		// Merge is pinned to the head GitHub has, so it needs one.
-		mergeable: !merged && pull?.state === "open" && pull.merge === "ready" && !!pull.sha,
+		// Merge is pinned to the head GitHub has, and only a finished review of that head admits it.
+		mergeable: !merged && pull?.state === "open" && pull.merge === "ready" && !!pull.sha
+			&& build.review?.phase === "finished" && build.review.head === pull.sha,
 	});
 	const waiting = agents.some((agent) => agent.state === "waiting");
 	if (merged) return card("Merged", `#${merged.number} · ${TIME.format(merged.at)}`);

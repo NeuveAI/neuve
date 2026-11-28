@@ -175,14 +175,18 @@ const pull = (patch: Partial<GithubPull> = {}): GithubPull => ({
 const planned = (patch: Partial<Build>, value: GithubPull) =>
 	buildCards([build({ branch: "o/build-p1", ...patch })], 1, (author) => author, new Map([["o/build-p1", value]])).get("c1")!;
 
-// Why: Merge is a host operation pinned to GitHub's head, so the card offers it only while GitHub
+// Why: Merge is pinned to GitHub's head and goes only to a head the plan's reviewer reviewed, so the card offers it only while GitHub
 // would merge that head, and never again once the build records the merge.
-test("the card offers Merge only for an open pull request GitHub would merge, until it is merged", () => {
-	expect(planned({}, pull()).mergeable).toBe(true);
-	expect(planned({}, pull({ state: "draft" })).mergeable).toBe(false);
-	expect(planned({}, pull({ merge: "blocked" })).mergeable).toBe(false);
-	expect(planned({}, pull({ sha: undefined })).mergeable).toBe(false);
-	const merged = planned({ merged: { number: 12, at: 0 } }, pull({ state: "merged" }));
+test("the card offers Merge only for a reviewed head GitHub would merge, until it is merged", () => {
+	const reviewed = { review: { chat: 3, review: "r", phase: "finished" as const, head: SHA } };
+	expect(planned(reviewed, pull()).mergeable).toBe(true);
+	expect(planned({}, pull()).mergeable).toBe(false);
+	expect(planned({ review: { ...reviewed.review, phase: "running" } }, pull()).mergeable).toBe(false);
+	expect(planned(reviewed, pull({ sha: "9".repeat(40) })).mergeable).toBe(false);
+	expect(planned(reviewed, pull({ state: "draft" })).mergeable).toBe(false);
+	expect(planned(reviewed, pull({ merge: "blocked" })).mergeable).toBe(false);
+	expect(planned(reviewed, pull({ sha: undefined })).mergeable).toBe(false);
+	const merged = planned({ ...reviewed, merged: { number: 12, at: 0 } }, pull({ state: "merged" }));
 	expect([merged.mergeable, merged.title, merged.stoppable]).toEqual([false, "Merged", false]);
 });
 
