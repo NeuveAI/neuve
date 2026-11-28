@@ -1,7 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, mock, test } from "bun:test";
+
+import type { Event as ChannelEvent } from "@ace/channel/protocol";
+import type { Event } from "@ace/ui";
 
 import type { Item } from "../src/transcript";
 import { toEvents } from "../src/timeline";
+
+mock.module("../src/host", () => ({ host: { channel: async () => undefined }, onOpen: () => () => {} }));
+const { apply } = await import("../src/transcript");
 
 const reply = (key: string, mode?: "plan" | "ace"): Item => ({
   kind: "reply",
@@ -49,4 +55,30 @@ test("a turn that only wrote the plan carries the Plan label, a refused write do
   const events = toEvents(items, "c", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {});
   expect(events.map((event) => (event as { agent?: { mode: string } }).agent?.mode))
     .toEqual(["plan", undefined, undefined]);
+});
+
+// Why: the channel starts the turn after Plan mode turns on with an input of its own. Drawn as a
+// message it reads as one from "unknown", and crediting its run to that author reads "asked by
+// unknown"; the turn belongs to whoever asked for the plan.
+test("the channel's Plan mode input draws no row and leaves the plan's run to the person who asked", () => {
+  const said = (entry: number, author: string, system?: { kind: "neuve:plan:entered" }): ChannelEvent => ({
+    kind: "message",
+    chat: 1,
+    entry,
+    at: entry * 1_000,
+    author,
+    text: "Plan mode is on.",
+    invoked: true,
+    ...(system ? { system } : {}),
+  });
+  let state = { items: [], typing: {} } as unknown as Parameters<typeof apply>[0];
+  state = apply(state, said(1, "teammate"));
+  state = { ...state, items: [...state.items, reply("asked")] };
+  state = apply(state, said(2, "unknown", { kind: "neuve:plan:entered" }));
+  state = { ...state, items: [...state.items, reply("planned", "plan")] };
+  const events = toEvents(
+    state.items, "c", false, { text: "" }, {}, new Map(), {}, {}, {}, (asker) => `asked by ${asker}`, {},
+  ) as Extract<Event, { type: "message" }>[];
+  expect(events.map((event) => event.uid)).toEqual(["e1", "asked", "planned"]);
+  expect(events.at(-1)!.sender).toMatchObject({ credit: "model · asked by teammate" });
 });

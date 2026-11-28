@@ -90,7 +90,7 @@ import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanEntry, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
 import { deferredPluginTool, pluginDiscovery, PLUGIN_SEARCH } from "./plugin-search";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
@@ -107,6 +107,7 @@ import type {
 	ModelOption,
 	ModelRef,
 	PendingModel,
+	PlanNotice,
 	Request,
 	RunEnd,
 	ReviewCard,
@@ -116,7 +117,7 @@ import type {
 	Said,
 	Usage,
 } from "./protocol";
-import { buildId, MENTION, reservedBuildRequestId, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
+import { buildId, MENTION, reservedBuildRequestId, reservedPlanRequestId, reservedReviewRequestId, ReviewFeedDefinition } from "./protocol";
 import { queue, withdrawn } from "./queue";
 import * as room from "./room";
 import { exportSeed, importSeed, type Seed } from "./seed";
@@ -523,8 +524,8 @@ export class Channel {
 		// and subscription cannot miss a run transition. LiveDoc forks start empty in pi.
 		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
 		channel.#builds.observe(await harness.snapshot(BuildsDoc, context));
-		await channel.#reconcilePlanExits();
 		await channel.#restoreRunsAndHandoffs(handoffs);
+		let opened = false;
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
 			const unannouncedEntries = new Set<EntryId>();
@@ -612,12 +613,9 @@ export class Channel {
 					channel.#caption(scope.conversationId);
 				}
 			}
-			if (changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
-				&& !(change.value as LiveState | null)?.run)
-				&& !channel.#closing.signal.aborted) {
-				const task = channel.#reconcilePlanExits().catch(error => channel.#log("error", "plan.exit.reconcile", failure(error)));
-				channel.#backgroundTasks.add(task);
-				void task.finally(() => channel.#backgroundTasks.delete(task));
+			if (opened && changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
+				&& !(change.value as LiveState | null)?.run)) {
+				channel.#schedulePlanReconcile();
 			}
 			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
@@ -654,6 +652,7 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
+		await channel.#reconcilePlanModes("open");
 		const prepareModels = options.resume !== false && options.prepareModels;
 		const deferred = prepareModels && await channel.#hasRecoverableWork();
 		const feed = Promise.resolve().then(async () => {
@@ -677,6 +676,8 @@ export class Channel {
 		await feed;
 		if (options.resume !== false && !deferred) await channel.#resumeWork();
 		log("info", "channel.open", { name: value.name, project: options.project });
+		opened = true;
+		channel.#schedulePlanReconcile();
 		return channel;
 		} catch (error) {
 			const errors: unknown[] = [error];
@@ -1146,15 +1147,40 @@ export class Channel {
 		try {
 			// The newest human input names who is waiting; agents' inputs are their parents' work.
 			const input = await this.#harness.commit(async (tx) => {
+				let planEntry: EntryId | undefined;
 				for (const submission of submissions.toReversed()) {
 					if (submission?.type !== "input" || submission.conversationId !== chat || submission.entry === undefined) continue;
 					if (this.#builds.isBrief(submission) || isMentionSubmission(submission)) continue;
+					if (submission.requestId && reservedPlanRequestId(submission.requestId)
+						&& (await tx.doc(ChatModesDoc)).entered?.[chat]?.includes(submission.requestId)) {
+						planEntry ??= submission.entry;
+						continue;
+					}
 					const human = room.human((await tx.entry(submission.entry))!);
 					if (human && !room.isAgent(human.author)) return { author: human.author, submission: submission.id };
 				}
+				if (planEntry === undefined) return;
+				// The Plan mode input resumes the person's prior request in a separate run.
+				const mentionsByChat = new Map<ConversationId, Set<EntryId>>();
+				let cursor: Cursor | undefined;
+				do {
+					const page = await tx.scanEntries({ conversationId: chat, maxEntryId: (planEntry - 1) as EntryId }, 32, cursor);
+					for (const entry of page.items) {
+						const human = room.human(entry);
+						if (!human?.invoked || room.isAgent(human.author)) continue;
+						const source = entry.conversationId;
+						if (this.#builds.agent(source)) {
+							const mentions = mentionsByChat.get(source) ?? await this.#mentionInputEntries(source);
+							mentionsByChat.set(source, mentions);
+							if (mentions.has(entry.id)) continue;
+						}
+						return { author: human.author };
+					}
+					cursor = page.next;
+				} while (cursor !== undefined);
 			}, context);
 			if (!input) return;
-			const feed = await this.#harness.snapshot(ReviewFeedDoc, chat, context);
+			const feed = input.submission === undefined ? undefined : await this.#harness.snapshot(ReviewFeedDoc, chat, context);
 			const notice = Object.entries(feed?.notices ?? {}).find(([, notice]) =>
 				notice.delivered && notice.chat === chat && notice.submission === input.submission
 			);
@@ -1163,6 +1189,19 @@ export class Channel {
 		} catch (error) {
 			this.#log("warn", "run.publish", failure(error));
 		}
+	}
+
+	async #mentionInputEntries(chat: ConversationId) {
+		const entries = new Set<EntryId>();
+		let cursor: Cursor | undefined;
+		do {
+			const page = await this.#options.storage.scanSubmissions({ conversationId: chat }, 256, cursor, context);
+			for (const submission of page.items) {
+				if (isMentionSubmission(submission) && submission.entry !== undefined) entries.add(submission.entry);
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		return entries;
 	}
 
 	/** Durably abort every chat's work, including background subagents, so reopening resumes none of it. */
@@ -1442,6 +1481,7 @@ export class Channel {
 	#clientRequestId(requestId: string | undefined) {
 		if (reservedReviewRequestId(requestId)) throw new Error("The neuve.review: request-ID namespace is reserved for the host");
 		if (reservedBuildRequestId(requestId)) throw new Error("The neuve.build: request-ID namespace is reserved for the host.");
+		if (reservedPlanRequestId(requestId)) throw new Error("The neuve.plan:enter: request-ID namespace is reserved for the host.");
 	}
 
 	async #admitted<T>(id: ChatId | undefined, admit: (settled: Promise<T>) => Promise<T>): Promise<T> {
@@ -1465,18 +1505,20 @@ export class Channel {
 	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
 		await this.#resuming;
 		if (this.#closed) throw new Error("The channel is shutting down");
-		return this.#admitted(handle.id, async () => {
-			if (canSubmit?.() === false) return;
-			await this.#options.prepareModels?.();
-			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
-			if (canSubmit?.() === false) return;
-			await this.#placeChatLane(handle.id, callContext);
-			if (canSubmit?.() === false) return;
-			const mention = isMentionSubmission(input);
-			const { author, text } = room.input(input.content);
-			const ownerText = mention && author === this.#options.owner ? text : undefined;
-			return this.#submit(handle, input, {}, ownerText, callContext);
-		});
+		return this.#admitted(handle.id, () => this.#submitInput(handle, input, callContext, canSubmit));
+	}
+
+	async #submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean) {
+		if (canSubmit?.() === false) return;
+		await this.#options.prepareModels?.();
+		await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
+		if (canSubmit?.() === false) return;
+		await this.#placeChatLane(handle.id, callContext);
+		if (canSubmit?.() === false) return;
+		const mention = isMentionSubmission(input);
+		const { author, text } = room.input(input.content);
+		const ownerText = mention && author === this.#options.owner ? text : undefined;
+		return this.#submit(handle, input, {}, ownerText, callContext);
 	}
 
 	async #submit(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, selection: ModelSelection, ownerText: string | undefined, callContext: Context): Promise<Submission> {
@@ -1711,22 +1753,57 @@ export class Channel {
 		return submission;
 	}
 
-	async #reconcilePlanExits() {
-		const transitions = await this.#harness.commit(async tx => {
-			const doc = await tx.doc(ChatModesDoc);
-			const transitions: ModeTransition[] = [];
-			for (const id of Object.keys(doc.pendingExits ?? {})) {
-				const transition = await reconcilePlanExit(tx, Number(id) as ConversationId);
-				if (transition) transitions.push(transition);
-			}
-			return transitions;
-		}, context);
-		for (const transition of transitions) await this.#planExited(transition);
+	#schedulePlanReconcile() {
+		if (this.#options.resume === false || this.#closing.signal.aborted) return;
+		const task = Promise.resolve(this.#resuming).then(() => this.#reconcilePlanModes("background"))
+			.catch(error => this.#log("error", "plan.mode.reconcile", failure(error)));
+		this.#backgroundTasks.add(task);
+		void task.finally(() => this.#backgroundTasks.delete(task));
 	}
 
-	async #planExited({ chat, previous, mode, approval }: ModeTransition) {
+	async #reconcilePlanModes(phase: "open" | "background") {
+		if (this.#closing.signal.aborted) return;
+		const { exits, entries } = await this.#harness.commit(async tx => {
+			const doc = await tx.doc(ChatModesDoc);
+			const exits: ModeTransition[] = [];
+			for (const id of Object.keys(doc.pendingExits ?? {})) {
+				const transition = await reconcilePlanExit(tx, Number(id) as ConversationId);
+				if (transition) exits.push(transition);
+			}
+			return { exits, entries: Object.keys(doc.pendingEntries ?? {}) };
+		}, context);
+		for (const transition of exits) await this.#planExited(transition, phase === "background");
+		for (const id of entries) {
+			const chat = Number(id) as ConversationId;
+			const conversation = await this.#harness.conversation(chat, context);
+			if (!conversation) continue;
+			const reconcile = async () => {
+				if (this.#closing.signal.aborted) return;
+				const transition = await this.#harness.commit(tx => reconcilePlanEntry(tx, chat), context);
+				if (!transition) return;
+				const { requestId, mode } = transition;
+				if (mode) {
+					if (phase === "background") await this.#publishSelection(chat, mode);
+					this.#log("info", "plan.mode.entered", { chat, previousChatMode: "ace", chatMode: mode });
+				}
+				if (phase === "open") return;
+				await this.#submitInput(conversation, {
+					type: "input", whenBusy: "followUp", requestId,
+					content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
+				}, context);
+				await this.#harness.commit(async tx => {
+					const pending = (await tx.doc(ChatModesDoc)).pendingEntries;
+					if (pending?.[chat] === requestId) delete pending[chat];
+				}, context);
+			};
+			if (phase === "open") await reconcile();
+			else await this.#admitted(chat, reconcile);
+		}
+	}
+
+	async #planExited({ chat, previous, mode, approval }: ModeTransition, publish = true) {
 		this.#log("info", "plan.mode.exited", { chat, previousChatMode: previous, chatMode: mode, approvedPlanId: approval.plan });
-		await this.#publishSelection(chat, mode);
+		if (publish) await this.#publishSelection(chat, mode);
 	}
 
 	async #publishSelection(chat: ConversationId, mode?: ChatMode) {
@@ -1997,8 +2074,9 @@ export class Channel {
 		const conversation = await this.#conversation(request.chat);
 		const stream = await watchEvents(this.#harness, conversation.id, context);
 		const observedChats = new Set<ConversationId>([conversation.id]);
+		type SystemNotice = ReviewNotice | BuildNotice | PlanNotice;
 		type NoticeIndex = {
-			entries: Map<number, ReviewNotice | BuildNotice>; submissions: Map<number, ReviewNotice | BuildNotice>;
+			entries: Map<number, SystemNotice>; submissions: Map<number, SystemNotice>;
 			pendingEntries: Set<number>; pendingSubmissions: Set<number>;
 		};
 		const notices = new Map<number, NoticeIndex>();
@@ -2025,6 +2103,16 @@ export class Channel {
 							if (record.entry !== undefined) index.entries.set(record.entry, system);
 						}
 					}
+					await this.#harness.commit(async tx => {
+						const { entered } = await tx.doc(ChatModesDoc);
+						for (const requestId of entered?.[chat] ?? []) {
+							const record = await tx.submissionByRequest(chat, requestId);
+							if (record?.type !== "input") continue;
+							const system: PlanNotice = { kind: "neuve:plan:entered" };
+							index.submissions.set(record.id, system);
+							if (record.entry !== undefined) index.entries.set(record.entry, system);
+						}
+					}, context);
 					const feed = await this.#harness.snapshot(ReviewFeedDoc, chat, context);
 					for (const [review, notice] of Object.entries(feed?.notices ?? {})) {
 						if (notice.chat !== chat) continue;
@@ -2052,7 +2140,13 @@ export class Channel {
 		const updates = new Set<Promise<void>>();
 		const unsubscribeNotices = this.#harness.subscribeCommits(({ changes }) => {
 			const chats = new Set<ConversationId>();
-			for (const change of changes) if (change.type === "document" && change.record.kind === ReviewFeedDefinition.kind && change.record.scope.kind === "conversation" && observedChats.has(change.record.scope.conversationId)) chats.add(change.record.scope.conversationId);
+			for (const change of changes) {
+				if (change.type !== "document") continue;
+				const { kind, scope } = change.record;
+				if (kind === ReviewFeedDefinition.kind && scope.kind === "conversation" && observedChats.has(scope.conversationId)) {
+					chats.add(scope.conversationId);
+				}
+			}
 			if (!chats.size || stopped) return;
 			const update = loadNotices(chats).then(() => queueChanged());
 			updates.add(update);
@@ -2245,6 +2339,7 @@ export class Channel {
 		stream.start(async (batch) => {
 			const chats = new Set<ConversationId>();
 			for (const event of batch) {
+				// Pi publishes the input entry and its placed submission in the same batch.
 				if (event.type === "submission") chats.add(event.record.conversationId);
 				else if (event.type === "snapshot") for (const chat of sourceChats(event.entries)) chats.add(chat);
 			}

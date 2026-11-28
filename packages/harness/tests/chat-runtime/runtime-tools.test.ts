@@ -97,19 +97,24 @@ test("an unattended runtime with its own sandbox is served only the tools that c
 
 // A runtime may silently lose a channel tool even though Pi registered the checked handler.
 test("channel agent tools reach runtimes with or without their own tools", () => {
-  const buildTools = ["agent_start", "agent_message", "set_agent_model"];
-  const offered = conversation([...buildTools, "lane"]);
+  const channelTools = [
+    "plan_enter",
+    "agent_start",
+    "agent_message",
+    "set_agent_model",
+  ];
+  const offered = conversation([...channelTools, "lane"]);
   const own = policy(offered, handle, undefined, { ownTools: true });
   expect(own.tools.map((tool) => tool.name)).toEqual([
     "question",
-    ...buildTools,
+    ...channelTools,
   ]);
   expect(own.systemPrompt).toContain("Neuve withholds them: lane.");
   const other = policy(offered, handle, undefined, { ownTools: false });
   expect(other.tools.map((tool) => tool.name)).toEqual([
     ...coding,
     "question",
-    ...buildTools,
+    ...channelTools,
     "lane",
   ]);
 });

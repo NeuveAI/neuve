@@ -9,6 +9,7 @@ import type {
 	Image,
 	Plan,
 	PlanComment,
+	PlanNotice,
 	ReviewNotice,
 	QueuedMessage,
 	Reactions,
@@ -56,7 +57,7 @@ export type Item =
 		/** The agents the channel delivered it to, by chat. */
 		agents?: ChatId[];
 		/** The host's mark on its review wake or on its brief to a build's agent; such a message is no person's. */
-		system?: ReviewNotice | BuildNotice;
+		system?: ReviewNotice | BuildNotice | PlanNotice;
 		deleted?: boolean;
 		/** When its author last edited it, in ms. */
 		edited?: number;
@@ -192,8 +193,11 @@ export function apply(state: Transcript, event: Event): Transcript {
 				items: [...state.items, { kind: "review-requested", key: `e${event.entry}`, at: event.at, text: "", review: event.review }],
 			};
 		case "queue": {
-			// A withdrawn send of plan comments leaves its words kept in the Plan tab, not in the composer.
-			const taken = event.withdrawn?.filter((message) => !state.commentSends.includes(message.submission));
+			// A withdrawn send of plan comments leaves its words kept in the Plan tab, not in the composer;
+			// the channel's Plan mode input is no one's, so it goes nowhere.
+			const taken = event.withdrawn?.filter((message) =>
+				!state.commentSends.includes(message.submission) && message.system?.kind !== "neuve:plan:entered"
+			);
 			if (!taken?.length) return { ...state, queue: event.messages };
 			const returned = [...state.returned, ...taken];
 			if (state.busy) {
@@ -205,6 +209,9 @@ export function apply(state: Transcript, event: Event): Transcript {
 		}
 		case "message": {
 			const { [event.author]: _, ...typing } = state.typing;
+			// The channel's input that starts the turn after Plan mode turns on is no one's message, and
+			// leaving it out keeps that turn credited to whoever asked for the plan.
+			if (event.system?.kind === "neuve:plan:entered") return { ...state, typing };
 			return {
 				...state,
 				typing,

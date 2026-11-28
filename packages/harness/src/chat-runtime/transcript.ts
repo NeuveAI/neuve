@@ -28,6 +28,7 @@ export const RUNTIME_WORK_TOOL = "runtime_work";
 /** pi's shell and file tools, which a runtime with its own tools has already: never served to it. */
 const CODING_TOOLS = new Set(CodingTools.tools?.map((tool) => tool.name) ?? []);
 export const PLAN_TOOL = "plan_write";
+export const PLAN_ENTER_TOOL = "plan_enter";
 const PLAN_COMMENT_TOOL = "plan_comment_answer";
 export const ATTENDED_SECTION = "neuve.chat.request-attended";
 const planningRequest = Symbol.for("neuve.chat.plan-request");
@@ -39,6 +40,7 @@ const planningRequest = Symbol.for("neuve.chat.plan-request");
  */
 const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   "question",
+  PLAN_ENTER_TOOL,
   PLAN_TOOL,
   PLAN_COMMENT_TOOL,
   "agent_start",

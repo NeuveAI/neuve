@@ -65,6 +65,15 @@ export type ReviewNotice = { kind: "neuve:review:terminal"; review: string };
  */
 export type BuildNotice = { kind: "neuve:build:brief"; build: string };
 
+/** The host's input that starts the next turn in Plan mode. */
+export type PlanNotice = { kind: "neuve:plan:entered" };
+
+export const PLAN_REQUEST_PREFIX = "neuve.plan:enter:";
+
+export function reservedPlanRequestId(requestId: string | undefined): boolean {
+	return requestId?.startsWith(PLAN_REQUEST_PREFIX) ?? false;
+}
+
 export function reservedReviewRequestId(requestId: string | undefined): boolean {
 	return requestId?.startsWith("neuve.review:") ?? false;
 }
@@ -188,6 +197,7 @@ export type Plan = {
 
 /** The tool by which a planning chat's agent writes its plan; the only writer of plan files. */
 export const PLAN_TOOL = "plan_write";
+export const PLAN_ENTER_TOOL = "plan_enter";
 
 // Comments on a plan.
 
@@ -547,7 +557,7 @@ export type QueuedMessage = {
 	images?: Image[];
 	files?: TextFile[];
 	invoked: boolean;
-	system?: ReviewNotice | BuildNotice;
+	system?: ReviewNotice | BuildNotice | PlanNotice;
 };
 
 export type Answer = { choices: number[] } | { custom: string };
@@ -765,7 +775,7 @@ export type Event =
 		images?: Image[];
 		files?: TextFile[];
 		invoked: boolean;
-		system?: ReviewNotice | BuildNotice;
+		system?: ReviewNotice | BuildNotice | PlanNotice;
 		/** The channel fills this with the chats of the agents the message was delivered to. */
 		agents?: ChatId[];
 		deleted?: boolean;

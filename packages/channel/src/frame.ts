@@ -18,6 +18,7 @@ const files = z.array(z.object({ name: text, text })).optional();
 const system = z.discriminatedUnion("kind", [
 	z.object({ kind: z.literal("neuve:review:terminal"), review: text }),
 	z.object({ kind: z.literal("neuve:build:brief"), build: text }),
+	z.object({ kind: z.literal("neuve:plan:entered") }),
 ]).optional();
 const queued = z.object({
 	submission: id,
