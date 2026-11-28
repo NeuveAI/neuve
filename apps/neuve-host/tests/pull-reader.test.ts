@@ -160,6 +160,28 @@ test("a repeat watch discovers a newly published draft in the channel repository
 	}
 });
 
+test("a watched draft refreshes on the pending cadence", async () => {
+	const reads: (string | null)[] = [];
+	const github = transport((url, tag) => {
+		if (url.pathname.endsWith("/pulls")) return Response.json([detail(7, branch, "open", true)]);
+		if (url.pathname.endsWith("/pulls/7")) {
+			reads.push(tag);
+			return Response.json(detail(7, branch, "open", tag === null), {
+				headers: { etag: tag === null ? '"draft"' : '"open"' },
+			});
+		}
+	});
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10_000 });
+	try {
+		const card = updates(readers, branch);
+		await until(() => card.values.at(-1)?.pull?.state === "open");
+		expect(card.values.map(value => value.pull?.state)).toEqual(["draft", "open"]);
+		expect(reads).toEqual([null, '"draft"']);
+	} finally {
+		readers.close();
+	}
+});
+
 test("a watch discovers a replacement after the previous pull request merged", async () => {
 	let replacement = false;
 	const gitHub = transport(url => {

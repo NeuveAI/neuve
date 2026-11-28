@@ -97,7 +97,7 @@ export class PullReaders {
 				}
 				if (changed) this.changed?.(repo, branch);
 				if (!signal.aborted && open(state.pull)) {
-					const pending = state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending");
+					const pending = state.pull.state === "draft" || state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending");
 					reader.timer = setTimeout(() => void this.#read(reader), pending && !state.error ? this.cadence.pending : this.cadence.idle);
 				}
 				return { kind: "succeeded", value: undefined };
