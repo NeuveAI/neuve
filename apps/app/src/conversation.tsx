@@ -31,7 +31,7 @@ import { OfflineHost, useRoster } from "./onboarding";
 import { present } from "./presence";
 import { planCards } from "./plan-card";
 import { commentSends, commentWords } from "./plan-comments";
-import { mergePlan, usePulls } from "./pull";
+import { mergePlan, readAgain, usePulls } from "./pull";
 import { pendingQuestion, Question } from "./question";
 import { newestReview, reviewActions, reviewTab, withCards } from "./review-card";
 import { AGENT, credit, sources, toEvents } from "./timeline";
@@ -146,6 +146,16 @@ export function Conversation(
 	// The builds this chat planned: their cards' pull requests, and what their agents wait on.
 	const started = useMemo(() => transcript.builds.filter((build) => build.chat === id), [transcript.builds, id]);
 	const pulls = usePulls(buildBranches(started, channel.repo));
+	// The worker opens, readies and merges a plan's pull request when its agents' runs end or its
+	// review finishes, so each of those build changes asks the host to read the branch again.
+	const moved = started.map((build) =>
+		[build.branch, build.agents.map((agent) => agent.state).join(), build.review?.phase, build.review?.head, build.merged?.at].join(" ")
+	).join("\n");
+	useEffect(() => {
+		if (!channel.repo) return;
+		for (const [repo, branch] of buildBranches(started, channel.repo)) readAgain(repo, branch);
+		// `moved` is the part of `started` that can change a pull request.
+	}, [moved, channel.repo]);
 	const builds = useMemo(
 		() => buildCards(started, id, (author) => author === user ? "you" : people[author] || author, pulls),
 		[started, id, user, people, pulls],
