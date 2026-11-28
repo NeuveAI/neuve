@@ -8,6 +8,7 @@ import type { Metadata } from "@ace/channel/protocol";
 import type {
 	Event,
 	HostFrame,
+	PullUpdate,
 	Listing,
 	People,
 	Presence,
@@ -48,6 +49,8 @@ export class GatewayClient {
 	#pending = new Map<number, Pending>();
 	#listeners = new Set<() => void>();
 	#terminals = new Map<string, (frame: TerminalFrame) => void>();
+	#pulls = new Map<string, { repo: string; branch: string; listener: (value: PullUpdate) => void }>();
+	#nextPull = 1;
 	#retry = 250;
 	#timer?: ReturnType<typeof setTimeout>;
 	#closed = false;
@@ -106,6 +109,7 @@ export class GatewayClient {
 				this.channels = this.#listings(channels);
 				this.#emit();
 			}, () => {});
+			for (const [id, pull] of this.#pulls) this.#openPull(id, pull);
 			this.onOpen?.();
 		});
 		socket.addEventListener(
@@ -173,6 +177,7 @@ export class GatewayClient {
 			this.channels = this.#listings(frame.channels);
 			return this.#emit();
 		}
+		if ("githubPull" in frame) return this.#pulls.get(frame.githubPull.subscription)?.listener(frame.githubPull);
 		if ("terminal" in frame) return this.#terminals.get(frame.terminal)?.(frame);
 		const pending = this.#pending.get(frame.id);
 		if (!pending) return;
@@ -316,6 +321,24 @@ export class GatewayClient {
 			if (request.op === "rename") this.#update(channel, value as Metadata);
 			return value;
 		});
+	}
+
+	#openPull(subscription: string, { repo, branch }: { repo: string; branch: string }) {
+		void this.request({ op: "github-pull-watch", subscription, repo, branch }).catch(error => {
+			if (this.status === "open") this.#pulls.get(subscription)?.listener({ pull: null, error: error.message });
+		});
+	}
+
+	/** Watch the pull request from a branch, with reattachment when the host reconnects. */
+	watchPull(repo: string, branch: string, listener: (value: PullUpdate) => void): () => void {
+		const subscription = String(this.#nextPull++);
+		const pull = { repo, branch, listener };
+		this.#pulls.set(subscription, pull);
+		if (this.status === "open") this.#openPull(subscription, pull);
+		return () => {
+			this.#pulls.delete(subscription);
+			if (this.status === "open") void this.request({ op: "github-pull-unwatch", subscription }).catch(() => {});
+		};
 	}
 
 	/** Receive a terminal's output and exit; returns the unsubscribe. */

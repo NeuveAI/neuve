@@ -33,12 +33,14 @@ export function pendingQuestion(tools: Tool[], busy: boolean): Tool | undefined 
 }
 
 /** Answers the agent's pending question; the first submission in the chat wins. */
-export function Question({ channel, chat, call, user, mayAnswer }: {
+export function Question({ channel, chat, call, user, mayAnswer, requester = "the agent" }: {
 	channel: Listing;
 	chat: number;
 	call: Tool;
 	user: string;
 	mayAnswer: boolean;
+	/** A plan's agent whose question shows in the chat that planned it. */
+	requester?: string;
 }) {
 	const questions = useMemo<QuestionItem[]>(
 		() =>
@@ -98,7 +100,7 @@ export function Question({ channel, chat, call, user, mayAnswer }: {
 		<QuestionView
 			id={call.call}
 			count={1}
-			requester="the agent"
+			requester={requester}
 			handle={handle}
 			form={{
 				definition: { questions },

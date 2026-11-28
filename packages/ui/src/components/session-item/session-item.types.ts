@@ -63,6 +63,9 @@ export type SidebarRow = {
 		};
 	};
 
+	/** What the channel's plans hold for a person: a pull request ready to merge, review units needing a person. */
+	plans?: { ready: boolean; humanRequired: number };
+
 	// Conversation (viewer-relative)
 	unreadCount: number;
 	mentionCount: number;

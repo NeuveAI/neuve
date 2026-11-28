@@ -3,13 +3,12 @@ import {
 	useCallback,
 	useEffect,
 	useMemo,
-	useReducer,
 	useRef,
 	useState,
 	useSyncExternalStore,
 } from "react";
 
-import type { Build, Change, Changes, GithubPull } from "@ace/channel/protocol";
+import type { Build, Change, Changes } from "@ace/channel/protocol";
 import type { ChannelInfo, Listing, TerminalShell } from "@ace/host/protocol";
 import {
 	AgentModelProvider,
@@ -27,7 +26,7 @@ import {
 import { IconCloud, IconGlobe, IconHash } from "@ace/ui/icons";
 
 import { AgentModel } from "./agent-model";
-import { agentName } from "./build-card";
+import { agentName, buildBranches, planDetails } from "./build-card";
 import { ChannelAccess } from "./channel-access";
 import { Conversation } from "./conversation";
 import { forget, publish, useDetails, useNewestPlan, useNewestReview } from "./details";
@@ -42,6 +41,7 @@ import { Review } from "./panels/review";
 import { Terminal } from "./panels/terminal";
 import { WorkLog } from "./panels/work-log";
 import { placement } from "./placement";
+import { readAgain, usePull, usePulls } from "./pull";
 import { openReview } from "./review-destination";
 import type { Item } from "./transcript";
 
@@ -66,10 +66,6 @@ const GITHUB = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(issues|pull)\/(\d+)\/?$
 const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 const dollars = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
-// Open checks change on their own, so the shown channel's pull request is read again this often.
-const PULL = 60_000;
-// While a merge or close settles, so the pull request's new state shows within seconds.
-const SETTLING = 3_000;
 
 /** Links people and agents wrote in the chat, newest mention first; tool output is left out. */
 function links(items: Item[], repo?: string): DetailsLink[] {
@@ -218,59 +214,24 @@ function StoppedCloud({ className }: { className?: string }) {
 	);
 }
 
-// Last read per repo and branch, so switching back to a channel shows its pull request at once.
-const pulls = new Map<string, GithubPull | null>();
-
-/**
- * The newest pull request from the chat's branch, read again while its channel is shown, since the
- * chat surfaces failed checks with the details sidebar closed. Opening a pull request doesn't move
- * the head, so a run ending reads it again too, as does the window regaining focus.
- */
-function usePull(
-	repo: string | undefined,
-	branch: string | undefined,
-	head: string | undefined,
-	busy: boolean,
-	settling: boolean,
-) {
-	const [, render] = useReducer((count: number) => count + 1, 0);
-	const key = repo && branch ? `${repo}\0${branch}` : undefined;
-	useEffect(() => {
-		if (!repo || !branch) return;
-		let active = true;
-		const read = () =>
-			host.request<GithubPull | null>({ op: "github-pull", repo, branch }).then(
-				(value) => {
-					pulls.set(`${repo}\0${branch}`, value);
-					if (active) render();
-				},
-				() => {},
-			);
-		void read();
-		const timer = setInterval(read, settling ? SETTLING : PULL);
-		window.addEventListener("focus", read);
-		return () => {
-			active = false;
-			clearInterval(timer);
-			window.removeEventListener("focus", read);
-		};
-	}, [repo, branch, head, busy, settling]);
-	return key ? pulls.get(key) : undefined;
-}
-
 export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; user: string; chat?: number }) {
 	const right = useLayoutRight();
 	const details = useDetails(channel.id);
 	const channels = useSyncExternalStore(host.subscribe, () => host.channels);
-	const { changes, info, items, asked, builds } = details;
+	const { changes, info, items, builds } = details;
 	const busy = !!info?.chats.find((value) => value.id === chat)?.busy;
-	const pull = usePull(
-		channel.repo,
-		changes?.branch,
-		changes?.head,
-		busy,
-		asked === "merge" || asked === "close",
-	);
+	const pull = usePull(channel.repo, changes?.branch);
+	// The host reads again when asked: as the chat's run ends and as its head moves.
+	useEffect(() => {
+		if (channel.repo && changes?.branch) readAgain(channel.repo, changes.branch);
+	}, [channel.repo, changes?.branch, changes?.head, busy]);
+	const list = builds?.list;
+	const planPulls = usePulls(buildBranches(list ?? [], channel.repo));
+	const plans = useMemo(() => planDetails(list ?? [], planPulls), [list, planPulls]);
+	const shownLinks = useMemo(() => {
+		const known = new Set([pull?.url, ...[...planPulls.values()].map((value) => value?.url)]);
+		return items && links(items, channel.repo).filter((link) => !known.has(link.url));
+	}, [items, channel.repo, pull?.url, planPulls]);
 	useEffect(() => publish(channel.id, { pull }), [channel.id, pull]);
 	useAsked(channel.id, busy, pull);
 	const git = useGit(channel, chat, user);
@@ -301,7 +262,6 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 		for (const { files } of changes.dirs || []) add(GROUPS.untracked, files);
 		return groups.size ? [...groups.values()] : [{ adds: 0, dels: 0, files: 0, lines: true }];
 	}, [changes]);
-	const mentioned = useMemo(() => items && links(items, channel.repo), [items, channel.repo]);
 	const agents = useMemo(() => items && subagents(items, busy), [items, busy]);
 	const working = useMemo(() => workers(builds?.list ?? [], details.work), [builds, details.work]);
 	const review = useCallback((path: string) => void openReview(channel.id, path), [channel.id]);
@@ -319,8 +279,9 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 					branch={changes?.branch}
 					pull={pull}
 					subagents={agents}
+					plans={plans}
 					workers={working}
-					links={mentioned?.filter((link) => link.url !== pull?.url)}
+					links={shownLinks}
 					facts={facts(channel, info, chat)}
 					note={workspace(channel, channels)}
 					creatingPr={git.creatingPr}

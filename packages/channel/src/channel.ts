@@ -206,6 +206,7 @@ export type Options = {
 	claim?(name: string, exact: boolean): Promise<string>;
 	/** Publish a projection of committed metadata to the runtime's channel catalog. */
 	onMetadata?(value: Metadata): void;
+	onPlans?(value: ReturnType<Builds["summary"]>): void;
 	/** Publish when the transcript last grew, in epoch milliseconds. */
 	onActivity?(at: number): void;
 	/** Rebuildable channel-wide projection of pi live runs, including child chats. */
@@ -542,7 +543,8 @@ export class Channel {
 			const selected = new Set<ConversationId>();
 			const ended: [ConversationId, readonly SubmissionId[]][] = [];
 			const began: [ConversationId, SubmissionId][] = [];
-			let runEnded = false;
+			const reviewed: ConversationId[] = [];
+			const endedChats: ConversationId[] = [];
 			for (const change of changes) {
 				if (change.type === "entry" && CompactionEntry.is(change.value)) {
 					log("info", "chat.compacted", { chat: change.value.conversationId, reason: change.value.data.reason });
@@ -562,6 +564,7 @@ export class Channel {
 				}
 				if (change.record.kind === BuildsDoc.definition.kind) {
 					const woken = channel.#builds.observe(change.value as BuildsState | null);
+					channel.#publishPlans();
 					if (options.resume !== false && woken.length) void Promise.resolve().then(() => channel.#builds.resume(woken));
 					continue;
 				}
@@ -593,13 +596,16 @@ export class Channel {
 					if (scope.kind === "conversation") approvals.changed(harness, scope.conversationId, change.value as ApprovalRequestsState | null);
 					continue;
 				}
+				if (change.record.kind === ReviewCardsDoc.definition.kind && change.record.scope.kind === "conversation") {
+					reviewed.push(change.record.scope.conversationId);
+				}
 				if (change.record.kind !== LiveDoc.definition.kind) continue;
 				const { scope } = change.record;
 				if (scope.kind !== "conversation") continue;
 				const { run } = (change.value || {}) as LiveState;
 				const inputs = channel.#runs.get(scope.conversationId);
 				if (inputs && inputs[0] !== run?.inputs[0]) {
-					runEnded = true;
+					endedChats.push(scope.conversationId);
 					if (!run || channel.#builds.agent(scope.conversationId)) ended.push([scope.conversationId, inputs]);
 				}
 				if (run) {
@@ -619,7 +625,9 @@ export class Channel {
 				channel.#backgroundTasks.add(task);
 				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
-			if (runEnded) void channel.#builds.replyToMentions();
+			if (endedChats.length) void channel.#builds.replyToMentions();
+			if (reviewed.length) void channel.#builds.refreshReviews(reviewed)
+				.catch(error => log("error", "build.review.failed", failure(error)));
 			// Ending a run settles its inputs in the same commit, in no particular change order.
 			for (const [chat, inputs] of ended) {
 				const task = channel.#ended(chat, inputs, changes);
@@ -633,6 +641,8 @@ export class Channel {
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
 		});
+		await channel.#builds.refreshReviews();
+		channel.#publishPlans();
 		if (options.relocate) {
 			await harness.commit(async (tx) => {
 				let cursor: Cursor | undefined;
@@ -860,6 +870,11 @@ export class Channel {
 				return this.#stopChat(conversation, this.#runs.has(conversation.id)
 					? { by: request.author, at: Date.now() } : undefined);
 			}
+			case "build-merge":
+				this.#author(request.author);
+				if (room.isAgent(request.author)) throw new Error("Only a person can merge a plan.");
+				await this.#mayInvoke(request.author);
+				return this.#builds.mergePull(request);
 			case "build-stop":
 				this.#author(request.author);
 				if (room.isAgent(request.author)) throw new Error("Only a person can stop the plan's agents.");
@@ -1580,6 +1595,11 @@ export class Channel {
 			throw new Error(waitForBrief);
 		}
 		return this.#harness.commit(tx => this.#modelSettings.select(tx, conversation.id, request), context);
+	}
+
+	#publishPlans() {
+		try { this.#options.onPlans?.(this.#builds.summary()); }
+		catch (error) { this.#log("error", "build.summary.failed", failure(error)); }
 	}
 
 	#canInvoke(author: string, shared: boolean): boolean {

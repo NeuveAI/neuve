@@ -13,7 +13,7 @@ import {
 import { userInfo } from "node:os";
 import { join } from "node:path";
 
-import { type Metadata, type ModelRef, type RunEnd, type Said, validateName } from "@ace/channel";
+import { type Metadata, type ModelRef, type PlanSummary, type RunEnd, type Said, validateName } from "@ace/channel";
 import { gitArgs } from "@ace/channel/git";
 
 import { config } from "./config";
@@ -50,6 +50,7 @@ export type Listing = {
 	active?: number;
 	/** Rebuildable live-run projection, not history; valid only while its source is connected. */
 	busy?: boolean;
+	plans?: PlanSummary;
 	/** The latest invoked run's end, a hint for its author's attention; pi keeps the run itself. */
 	ran?: RunEnd;
 	/** The latest message, a hint for teammates' attention like `ran`. */
@@ -313,6 +314,12 @@ export function busy(id: string, busy: boolean): void {
 	const record = read(id);
 	if (record.busy === busy) return;
 	write({ ...record, busy });
+}
+
+export function plans(id: string, plans: PlanSummary | undefined): void {
+	const record = read(id);
+	if (JSON.stringify(record.plans) === JSON.stringify(plans)) return;
+	write({ ...record, plans });
 }
 
 export function ran(id: string, ran: RunEnd): void {

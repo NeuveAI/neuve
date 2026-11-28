@@ -28,7 +28,7 @@ import { tabs } from "./tabs";
 
 const RETIRE_AFTER = 10 * 60_000;
 /** An archived channel keeps its history as it was archived. */
-const ARCHIVED = new Set(["say", "ask", "select", "chat", "react", "delete", "edit", "plan-approve", "approval-answer"]);
+const ARCHIVED = new Set(["say", "ask", "select", "chat", "react", "delete", "edit", "plan-approve", "build-merge", "approval-answer"]);
 for (const op of ["plan-comment", "plan-comment-reply", "plan-comment-edit", "plan-comment-remove", "plan-comments-send"]) {
 	ARCHIVED.add(op);
 }
@@ -88,6 +88,7 @@ const channel = await openChannel({
 	named: record.named,
 	claim: async (name, exact) => catalog.claim(id, name, exact),
 	onMetadata: (value) => catalog.metadata(id, value),
+	onPlans: (plans) => catalog.plans(id, plans),
 	onActivity: (at) => catalog.activity(id, at),
 	onBusy: (busy) => catalog.busy(id, busy),
 	onRun: (ran) => catalog.ran(id, ran),

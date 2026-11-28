@@ -9,6 +9,7 @@ import {
 
 import {
 	IconBranch,
+	IconChecklist,
 	IconChevronDown,
 	IconExternal,
 	IconFileDiff,
@@ -28,6 +29,7 @@ import { CreatePrMenu } from "../create-pr-menu";
 import { type GitAction, GitActionButton } from "../git-action";
 import { LoadingSpinner } from "../session-item/session-item-loading";
 import { AGENT_STATE_ICONS, SUBAGENT_STATE_ICONS } from "../agents/agents";
+import { LaneGlyph, REVIEW_LANE_COLORS } from "../requests/review";
 
 export type DetailsPullState = "open" | "draft" | "closed" | "merged";
 export type DetailsCheck = Check;
@@ -45,6 +47,15 @@ export type DetailsSubagent = {
 	state: "running" | "waiting" | "done" | "failed" | "stopped";
 	/** Opens where the agent's work is read, such as a build's agent on the work log. */
 	open?: () => void;
+};
+/** One of the channel's approved plans: its branch, its pull request, and its newest Neuve review. */
+export type DetailsPlan = {
+	id: string;
+	title: string;
+	branch?: string;
+	pull?: DetailsPull;
+	/** Units needing a person in the plan's newest finished review, and its batch on the desk. */
+	review?: { humanRequired: number; desk: string | null };
 };
 export type DetailsLink = { url: string; label: string; kind: "issue" | "pull" | "web" };
 export type DetailsFact = { label: string; value: string; title?: string };
@@ -67,6 +78,8 @@ export type SessionDetailsViewProps = {
 	/** `null` once looked up and none exists; absent while unknown or unavailable. */
 	pull?: DetailsPull | null;
 	subagents?: DetailsSubagent[];
+	/** The channel's approved plans, newest first. */
+	plans?: DetailsPlan[];
 	/** The builds' agents, each opening its own work on the work log. */
 	workers?: DetailsSubagent[];
 	links?: DetailsLink[];
@@ -90,7 +103,7 @@ const ROW =
 const ACTIVE = "hover:bg-muted/60 focus-visible:bg-muted/60";
 const GLYPH = "size-4 shrink-0";
 
-const PULL_ICONS: Record<DetailsPullState, [Icon, string]> = {
+export const PULL_ICONS: Record<DetailsPullState, [Icon, string]> = {
 	open: [IconPullRequest, "text-success"],
 	draft: [IconPullRequest, "text-muted-foreground"],
 	closed: [IconPullRequestClosed, "text-destructive"],
@@ -361,6 +374,54 @@ function Pull({ pull }: { pull: DetailsPull }) {
 	);
 }
 
+/** How many units of a finished review need a person, as the build card and the plans say it. */
+export function needPerson(count: number): string {
+	if (count === 0) return "No units need a person";
+	return count === 1 ? "1 unit needs a person" : `${count} units need a person`;
+}
+
+/** Each plan under its title: its branch, its pull request with its checks, and its review's units. */
+function Plans({ plans }: { plans?: DetailsPlan[] }) {
+	if (!plans?.length) return null;
+	return (
+		<Section title="Plans">
+			{plans.map((plan, index) => (
+				<div key={plan.id} className={cn("flex min-w-0 flex-col gap-1", REVIEW_LANE_COLORS, index > 0 && "mt-2")}>
+					<div className={cn(ROW, "font-medium")} title={plan.title}>
+						<IconChecklist className={cn(GLYPH, "text-muted-foreground")} aria-hidden />
+						<bdi className="min-w-0 truncate">{plan.title}</bdi>
+					</div>
+					{plan.branch && (
+						<div className={ROW} title={plan.branch}>
+							<IconBranch className={cn(GLYPH, "text-muted-foreground")} aria-hidden />
+							<span className="min-w-0 truncate font-mono text-xs">{plan.branch}</span>
+						</div>
+					)}
+					{plan.pull && <Pull pull={plan.pull} />}
+					{plan.review && <PlanReview review={plan.review} />}
+				</div>
+			))}
+		</Section>
+	);
+}
+
+function PlanReview({ review }: { review: NonNullable<DetailsPlan["review"]> }) {
+	const count = review.humanRequired;
+	const content = (
+		<>
+			<span className="grid size-4 shrink-0 place-items-center">
+				<LaneGlyph shape={count > 0 ? "required" : "agentic"} />
+			</span>
+			<span className={cn("min-w-0 truncate", count > 0 && "font-medium text-(--review-req-ink)")}>
+				{needPerson(count)}
+			</span>
+		</>
+	);
+	return review.desk
+		? <External href={review.desk} label={`${needPerson(count)}, open review desk`}>{content}</External>
+		: <div className={ROW}>{content}</div>;
+}
+
 /**
  * Details of one channel. Each part shows once its data is known, so a channel with no work yet
  * shows only what exists.
@@ -372,6 +433,7 @@ export function SessionDetailsView(
 		branch,
 		pull,
 		subagents,
+		plans,
 		workers,
 		links,
 		facts,
@@ -441,6 +503,7 @@ export function SessionDetailsView(
 			)}
 
 			<Agents title="Subagents" agents={subagents} icons={SUBAGENT_STATE_ICONS} />
+			<Plans plans={plans} />
 			<Agents title="Agents" agents={workers} icons={AGENT_STATE_ICONS} />
 
 			{shown && shown.length > 0 && (

@@ -10,6 +10,8 @@ import type {
 	GithubPull,
 } from "@ace/channel/protocol";
 
+import { z } from "zod";
+
 import { githubEnv } from "./keys";
 import { githubRepo, type HostRequest, NOT_GITHUB } from "./protocol";
 
@@ -68,8 +70,12 @@ type File = {
 	patch?: string;
 };
 
+function validRepository(value: string): boolean {
+	return REPO.test(value) && ![".", ".."].includes(value.split("/")[1]!);
+}
+
 export function repository(value: string): string {
-	if (!REPO.test(value) || [".", ".."].includes(value.split("/")[1]!)) {
+	if (!validRepository(value)) {
 		throw new Error("Choose a GitHub repository in owner/name format");
 	}
 	return value;
@@ -161,23 +167,42 @@ export function environment(): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function gh<T>(args: string[]): Promise<T> {
+async function spawnGh(args: string[], body?: string, cwd?: string, signal?: AbortSignal) {
 	const path = Bun.which("gh", { PATH: process.env.PATH });
 	if (!path) throw new Error("Install GitHub CLI on this host, then sign in with gh auth login.");
 	const child = Bun.spawn([path, ...args], {
-		env: environment(),
-		stdin: "ignore",
+		cwd,
+		env: signal ? { ...environment(), NO_COLOR: "1" } : environment(),
+		stdin: body === undefined ? "ignore" : new Blob([body]),
 		stdout: "pipe",
 		stderr: "pipe",
-		timeout: 30_000,
+		timeout: signal ? 15_000 : 30_000,
+		signal,
 	});
 	const [out, error, code] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
+	signal?.throwIfAborted();
+	return { out, error: error.trim(), code };
+}
+
+export async function runGh(args: string[], body?: string): Promise<string> {
+	// Keep repository-local worktree cleanup outside gh.
+	const { out, error, code } = await spawnGh(args, body, "/");
+	if (code !== 0) throw new Error(error || `gh exited with status ${code}`);
+	return out;
+}
+
+function checkGh({ code, error }: { code: number; error: string }) {
 	if (code === 4) throw new Error("Sign in to GitHub on this host with gh auth login.");
-	if (code !== 0) throw new Error(sentence(error.trim()) || "GitHub did not respond. Try again.");
+	if (code !== 0) throw new Error(sentence(error) || "GitHub did not respond. Try again.");
+}
+
+async function gh<T>(args: string[]): Promise<T> {
+	const { out, error, code } = await spawnGh(args);
+	checkGh({ code, error });
 	return JSON.parse(out) as T;
 }
 
@@ -247,7 +272,7 @@ export function login(changed: () => void): string | undefined {
 
 export const REMOTES = ["config", "--local", "--get-regexp", "^remote\\..*\\.(url|gh-resolved)$"] as const;
 
-/** The GitHub repository in `git config` output for REMOTES, preferring gh's chosen base. */
+/** The GitHub repository in `git config` output for REMOTES, preferring origin. */
 export function remote(config: string): string | null {
 	const remotes = new Map<string, string>();
 	let preferred: string | undefined;
@@ -260,7 +285,7 @@ export function remote(config: string): string | null {
 		if (field === "gh-resolved" && value === "base") preferred = name;
 		if (field === "url") remotes.set(name, value);
 	}
-	for (const name of [preferred, "origin", "upstream", ...remotes.keys()]) {
+	for (const name of ["origin", preferred, "upstream", ...remotes.keys()]) {
 		const url = name ? remotes.get(name) : undefined;
 		if (!url) continue;
 		const match =
@@ -268,7 +293,7 @@ export function remote(config: string): string | null {
 				.exec(url);
 		if (!match) continue;
 		const repo = match[1]!.replace(/\.git$/i, "");
-		if (REPO.test(repo)) return repository(repo);
+		if (validRepository(repo)) return repo.toLowerCase();
 	}
 	return null;
 }
@@ -413,42 +438,111 @@ const REVIEWS: Record<string, GithubPull["review"]> = {
 	REVIEW_REQUIRED: "required",
 };
 
-/**
- * The newest pull request from `branch` in the repository itself, or null when there is none.
- * `--head` matches the branch name in any fork, and strangers open pull requests from their forks'
- * `master` or `main`, so pull requests from other repositories never count as the channel's.
- */
-export async function pull(repo: string, branch: string): Promise<GithubPull | null> {
-	if (!branch || branch.startsWith("-")) throw new Error("Invalid branch name");
-	const found = await gh<
-		(Item & {
-			isDraft: boolean;
-			statusCheckRollup: Check[];
-			headRefOid: string;
-			reviewDecision: string;
-			isCrossRepository: boolean;
-		})[]
-	>([
-		"pr",
-		"list",
-		"--repo",
-		repository(repo),
-		`--head=${branch}`,
-		"--state",
-		"all",
-		"--limit",
-		"30",
-		"--json",
-		`${FIELDS},isDraft,statusCheckRollup,headRefOid,reviewDecision,isCrossRepository`,
-	]);
-	const value = found.find((candidate) => !candidate.isCrossRepository);
-	if (!value) return null;
-	const review = REVIEWS[value.reviewDecision];
+const Ref = z.object({ ref: z.string(), sha: z.string(), repo: z.object({ full_name: z.string() }).nullable() });
+const PullRow = z.object({ number: z.int().positive(), head: Ref });
+const PullDetail = PullRow.extend({
+	node_id: z.string(), title: z.string(), html_url: z.string(), draft: z.boolean(),
+	state: z.enum(["open", "closed"]), merged_at: z.string().nullable(),
+	mergeable_state: z.string(), mergeable: z.boolean().nullable(),
+	user: z.object({ login: z.string() }).nullable(), created_at: z.string(), updated_at: z.string(),
+	labels: z.array(z.object({ name: z.string(), color: z.string() })),
+});
+const CheckRuns = z.object({ check_runs: z.array(z.object({
+	name: z.string(), details_url: z.string().nullable(), status: z.string(), conclusion: z.string().nullable(),
+})) });
+const Statuses = z.object({ statuses: z.array(z.object({
+	context: z.string(), target_url: z.string().nullable(), state: z.string(),
+})) });
+type PullDetail = z.infer<typeof PullDetail>;
+
+type Cache = Map<string, { etag: string | null; value: unknown; next: string | undefined }>;
+export function pullGithub(run = spawnGh) {
+	async function read<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
+		const saved = cache.get(path);
+		const url = new URL(path, "https://api.github.com");
+		if (url.origin !== "https://api.github.com") throw new Error("GitHub returned an invalid link.");
+		const args = ["api", "-i", ...(saved?.etag ? ["-H", `If-None-Match: ${saved.etag}`] : []),
+			`${url.origin}${url.pathname}${url.search}`];
+		const result = await run(args, undefined, "/", signal);
+		const status = Number(/^HTTP\/\S+ (\d{3})\b/.exec(result.out)?.[1]);
+		if (status === 304 && saved) return { ...saved, value: schema.parse(saved.value), status };
+		checkGh(result);
+		const separator = /\r?\n\r?\n/.exec(result.out);
+		if (!separator || !Number.isFinite(status)) throw new Error("GitHub CLI returned an invalid HTTP response.");
+		const headers = result.out.slice(0, separator.index);
+		const row = {
+			etag: /^etag:[ \t]*(.+)/im.exec(headers)?.[1].trim() ?? null,
+			value: schema.parse(JSON.parse(result.out.slice(separator.index + separator[0].length))),
+			next: /<([^>]+)>; rel="next"/.exec(/^link:[ \t]*(.+)/im.exec(headers)?.[1] ?? "")?.[1],
+		};
+		cache.set(path, row);
+		return { ...row, status };
+	}
+
+	async function pages<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
+		const result: T[] = [];
+		for (let next: string | undefined = path; next;) {
+			const page: { value: T; next: string | undefined } = await read(next, schema, signal, cache);
+			result.push(page.value);
+			next = page.next;
+		}
+		return result;
+	}
+
+	const path = (repo: string) => `/repos/${repository(repo)}`;
+
 	return {
-		...item(value, "prs"),
-		checks: value.statusCheckRollup.map(check),
-		sha: value.headRefOid,
-		...(review ? { review } : {}),
+		async find(repo: string, branch: string, signal: AbortSignal, cache: Cache) {
+			const search = new URLSearchParams({ head: `${repo.split("/")[0]}:${branch}`, state: "all", sort: "created", direction: "desc", per_page: "100" });
+			const { value, status } = await read(`${path(repo)}/pulls?${search}`,
+				z.array(PullRow.extend({ state: PullDetail.shape.state })), signal, cache);
+			const matching = value.filter(row => row.head.ref === branch && row.head.repo?.full_name.toLowerCase() === repo);
+			return { number: (matching.find(row => row.state === "open") ?? matching[0])?.number, status };
+		},
+		async detail(repo: string, number: number, signal: AbortSignal, cache: Cache) {
+			return read(`${path(repo)}/pulls/${number}`, PullDetail, signal, cache);
+		},
+		async checks(repo: string, sha: string, signal: AbortSignal, cache: Cache) {
+			const prefix = `${path(repo)}/commits/${encodeURIComponent(sha)}`;
+			const [runs, statuses] = await Promise.all([
+				pages(`${prefix}/check-runs?per_page=100`, CheckRuns, signal, cache),
+				pages(`${prefix}/status?per_page=100`, Statuses, signal, cache),
+			]);
+			return [
+				...runs.flatMap(page => page.check_runs.map(run => check({
+					__typename: "CheckRun", name: run.name, status: run.status.toUpperCase(),
+					conclusion: run.conclusion?.toUpperCase() ?? "", detailsUrl: run.details_url ?? undefined,
+				}))),
+				...statuses.flatMap(page => page.statuses.map(status => check({
+					__typename: "StatusContext", context: status.context, state: status.state.toUpperCase(),
+					targetUrl: status.target_url ?? undefined,
+				}))),
+			];
+		},
+		async review(id: string, signal: AbortSignal) {
+			const response = await run(["api", "graphql", "-f",
+				"query=query($id: ID!) { node(id: $id) { ... on PullRequest { reviewDecision } } }",
+				"-f", `id=${id}`, "--jq", ".data.node.reviewDecision"],
+				undefined, "/", signal);
+			checkGh(response);
+			return REVIEWS[response.out.trim()];
+		},
+	};
+}
+
+export function pullSnapshot(value: PullDetail, checks: GithubCheck[], review: GithubPull["review"]): GithubPull {
+	const base = item({
+		number: value.number, title: value.title, url: value.html_url, isDraft: value.draft,
+		state: value.merged_at ? "MERGED" : value.state === "open" ? "OPEN" : "CLOSED",
+		author: value.user, createdAt: value.created_at, updatedAt: value.updated_at,
+		labels: value.labels, headRefName: value.head.ref,
+	}, "prs");
+	const merge = value.mergeable_state === "dirty" ? "conflicts"
+		: value.mergeable_state === "unknown" || value.mergeable === null ? "unknown"
+		: value.mergeable_state === "clean" || value.mergeable_state === "unstable" ? "ready" : "blocked";
+	return {
+		...base, checks, sha: value.head.sha, ...(review ? { review } : {}),
+		...(base.state === "open" || base.state === "draft" ? { merge } : {}),
 	};
 }
 

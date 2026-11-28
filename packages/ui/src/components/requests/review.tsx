@@ -394,6 +394,12 @@ export function reviewCardPlan(view: ReviewCardView, available: number): Plan {
 
 // -- Rendering --
 
+/** Neuve's review lane colours, when its theme provides them, for anything that draws a lane. */
+export const REVIEW_LANE_COLORS = cn(
+	"[--review-req:var(--nv-req,#c63d8e)] [--review-req-ink:var(--nv-req-fg,#ac2973)] [--review-sug:var(--nv-sug,#ad7c1c)] [--review-agt:var(--nv-agt,#148252)] [--review-sta:var(--nv-sta,#78736a)] [--review-live:var(--nv-gold,#b8860b)]",
+	"dark:[--review-req:var(--nv-req,#e680c5)] dark:[--review-req-ink:var(--nv-req-fg,#efb1dc)] dark:[--review-sug:var(--nv-sug,#e2ca5e)] dark:[--review-agt:var(--nv-agt,#44be82)] dark:[--review-sta:var(--nv-sta,#9a9488)] dark:[--review-live:var(--nv-gold,#e2ca5e)]",
+);
+
 const LANES = [
 	{ key: "humanRequired", label: "Human-required", color: "var(--review-req)", shape: "required" },
 	{ key: "humanSuggested", label: "Human-suggested", color: "var(--review-sug)", shape: "suggested" },
@@ -402,7 +408,7 @@ const LANES = [
 ] as const;
 
 /** Lane glyphs follow Neuve's: shape carries the review lane, so colour is never the only signal. */
-function LaneGlyph({ shape }: { shape: (typeof LANES)[number]["shape"] }) {
+export function LaneGlyph({ shape }: { shape: (typeof LANES)[number]["shape"] }) {
 	return (
 		<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" className="shrink-0">
 			{shape === "required" && <path d="M5 .8 9.2 5 5 9.2 .8 5z" fill="var(--review-req)" />}
@@ -668,12 +674,7 @@ export function ReviewCard({ view, width }: { view: ReviewCardView; width: numbe
 		<RequestCard
 			aria-label={view.kind === "refused" ? "Neuve review refusal" : "Neuve review"}
 			tone={plan.tone}
-			className={cn(
-				"overflow-hidden",
-				// Neuve's review lane colours, when its theme provides them.
-				"[--review-req:var(--nv-req,#c63d8e)] [--review-req-ink:var(--nv-req-fg,#ac2973)] [--review-sug:var(--nv-sug,#ad7c1c)] [--review-agt:var(--nv-agt,#148252)] [--review-sta:var(--nv-sta,#78736a)] [--review-live:var(--nv-gold,#b8860b)]",
-				"dark:[--review-req:var(--nv-req,#e680c5)] dark:[--review-req-ink:var(--nv-req-fg,#efb1dc)] dark:[--review-sug:var(--nv-sug,#e2ca5e)] dark:[--review-agt:var(--nv-agt,#44be82)] dark:[--review-sta:var(--nv-sta,#9a9488)] dark:[--review-live:var(--nv-gold,#e2ca5e)]",
-			)}
+			className={cn("overflow-hidden", REVIEW_LANE_COLORS)}
 			style={{ inlineSize: plan.width, blockSize: plan.height }}
 		>
 			<p role="status" className="sr-only">{plan.announce}</p>

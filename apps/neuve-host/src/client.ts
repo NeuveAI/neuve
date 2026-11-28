@@ -215,7 +215,7 @@ export class Connection {
 	}
 }
 
-export async function request<T = unknown>(id: string, body: Request): Promise<T> {
+export async function request<T = unknown>(id: string, body: Request | WorkerRequest): Promise<T> {
 	const connection = await Connection.open(id);
 	try {
 		return await connection.request<T>(body);

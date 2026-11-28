@@ -97,10 +97,8 @@ async function probe(path: string): Promise<Checkout> {
 		git(path, REMOTES),
 	]);
 	const main = worktrees.status === 0 ? /^worktree (.+)$/m.exec(worktrees.stdout)?.[1] : undefined;
-	const value: Checkout = { root: main || path, commit: !!main && head.status === 0 };
-	const repo = remotes.status === 0 ? remote(remotes.stdout) : null;
-	if (repo) value.repo = repo;
-	return value;
+	const repo = remotes.status === 0 ? remote(remotes.stdout) ?? undefined : undefined;
+	return { root: main || path, repo, commit: !!main && head.status === 0 };
 }
 
 async function project(path: string): Promise<Project> {

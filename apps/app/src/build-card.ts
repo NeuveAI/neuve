@@ -1,7 +1,18 @@
-import { failureCaption, type AgentName, type Build, type BuildAgent, type Chat, type ChatId, type WorkMessage } from "@ace/channel/protocol";
-import type { AgentLineView, BuildCardView, Event, Mention } from "@ace/ui";
+import {
+	failureCaption,
+	type AgentName,
+	type Build,
+	type BuildAgent,
+	type BuildReview,
+	type Chat,
+	type ChatId,
+	type GithubPull,
+	type WorkMessage,
+} from "@ace/channel/protocol";
+import type { AgentLineView, BuildCardView, DetailsPlan, Event, Mention } from "@ace/ui";
 
 import { AGENT_ALIAS } from "./agent-mention";
+import { reviewEntry } from "./review-card";
 
 const TIME = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const ROLES = { implementer: "Implementer", reviewer: "Reviewer" } as const;
@@ -106,21 +117,60 @@ export function mainLines(builds: Build[], chats: Chat[], avatar: string): Agent
 const alive = (agent: BuildAgent) => agent.state === "running" || agent.state === "waiting";
 
 /**
- * A build's card: its agents, and a head only where the person must act or is blocked. A build
- * still starting, or a plan delivered to agents already building, has no card: the plan's card
- * turning Approved answers the press, and the card comes with the first agent.
+ * The plan's newest Neuve review as its card shows it. Once the pull request's head has moved past
+ * the reviewed head, the review is stale and no longer counts toward the plan being ready.
  */
-export function buildView(build: Build, name: (author: string) => string): BuildCardView | undefined {
-	const { state, agents } = build;
-	const card = (title?: string, meta?: string, tone?: "error"): BuildCardView => ({
+function reviewView(review: BuildReview, pull: GithubPull | null | undefined): BuildCardView["review"] {
+	// A stopped review, or one whose connection was lost, has nothing on the desk to read.
+	const { phase } = review;
+	if (phase !== "queued" && phase !== "running" && phase !== "finished") return;
+	return {
+		phase,
+		...(review.humanRequired === undefined ? {} : { humanRequired: review.humanRequired }),
+		desk: review.desk && reviewEntry(review.desk) ? review.desk : null,
+		stale: !!pull?.sha && pull.sha !== review.head,
+	};
+}
+
+/**
+ * A build's card: the plan's pull request and newest Neuve review, its agents, and a head only
+ * where the person must act or is blocked, or once the plan is merged. A build still starting, or
+ * a plan delivered to agents already building, has no card: the plan's card turning Approved
+ * answers the press, and the card comes with the first agent.
+ */
+export function buildView(
+	build: Build,
+	name: (author: string) => string,
+	pull?: GithubPull | null,
+): BuildCardView | undefined {
+	const { state, agents, merged } = build;
+	const review = build.review && reviewView(build.review, pull);
+	const card =(title?: string, meta?: string, tone?: "error"): BuildCardView => ({
 		build: build.id,
 		...(title === undefined ? {} : { title }),
 		...(meta === undefined ? {} : { meta }),
 		...(tone ? { tone } : {}),
 		agents: agents.map((agent) => lineView(agent, agents)),
-		stoppable: state.kind !== "stopped" && agents.some(alive),
+		stoppable: !merged && state.kind !== "stopped" && agents.some(alive),
+		...(pull
+			? {
+				pull: {
+					number: pull.number,
+					title: pull.title,
+					url: pull.url,
+					state: pull.state,
+					checks: pull.checks,
+					conflicts: pull.merge === "conflicts",
+				},
+			}
+			: {}),
+		...(review ? { review } : {}),
+		// Merge is pinned to the head GitHub has, and only a finished review of that head admits it.
+		mergeable: !merged && pull?.state === "open" && pull.merge === "ready" && !!pull.sha
+			&& build.review?.phase === "finished" && build.review.head === pull.sha,
 	});
 	const waiting = agents.some((agent) => agent.state === "waiting");
+	if (merged) return card("Merged", `#${merged.number} · ${TIME.format(merged.at)}`);
 	switch (state.kind) {
 		case "starting":
 		case "delivered":
@@ -146,14 +196,57 @@ export function buildView(build: Build, name: (author: string) => string): Build
 	}
 }
 
-/** The cards of the builds whose plans were approved in chat `chat`, by the call that wrote each plan. */
-export function buildCards(builds: Build[], chat: ChatId, name: (author: string) => string) {
+/**
+ * The cards of the builds whose plans were approved in chat `chat`, by the call that wrote each
+ * plan, each with its branch's pull request from `pulls`.
+ */
+export function buildCards(
+	builds: Build[],
+	chat: ChatId,
+	name: (author: string) => string,
+	pulls: ReadonlyMap<string, GithubPull | null> = new Map(),
+) {
 	return new Map(
 		builds.flatMap((build) => {
-			const view = build.chat === chat && buildView(build, name);
+			const view = build.chat === chat && buildView(build, name, build.branch ? pulls.get(build.branch) : undefined);
 			return view ? [[build.plan.call, view] as const] : [];
 		}),
 	);
+}
+
+/**
+ * The channel's approved plans for its details, newest first: each plan's newest build, since a
+ * revision of a plan is a build of its own, with its branch's pull request from `pulls`.
+ */
+export function planDetails(builds: Build[], pulls: ReadonlyMap<string, GithubPull | null>): DetailsPlan[] {
+	const newest = new Map<string, Build>();
+	for (const build of builds) {
+		const kept = newest.get(build.plan.id);
+		if (!kept || kept.approved.at < build.approved.at) newest.set(build.plan.id, build);
+	}
+	return [...newest.values()].toSorted((a, b) => b.approved.at - a.approved.at).map((build) => {
+		const pull = build.branch ? pulls.get(build.branch) : undefined;
+		const { review } = build;
+		return {
+			id: build.plan.id,
+			title: build.plan.title,
+			...(build.branch ? { branch: build.branch } : {}),
+			...(pull ? { pull } : {}),
+			...(review?.phase === "finished" && review.humanRequired !== undefined
+				? {
+					review: {
+						humanRequired: review.humanRequired,
+						desk: review.desk && reviewEntry(review.desk) ? review.desk : null,
+					},
+				}
+				: {}),
+		};
+	});
+}
+
+/** The repository and branch of every build, whose pull requests the card and the details read. */
+export function buildBranches(builds: Build[], repo: string | undefined): [string, string][] {
+	return repo ? builds.flatMap((build) => build.branch ? [[repo, build.branch] as [string, string]] : []) : [];
 }
 
 /**

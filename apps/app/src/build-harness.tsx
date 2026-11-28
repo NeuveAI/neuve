@@ -1,14 +1,17 @@
 // Dev-only page (build.html, served by `vite` but not built), from fixtures: `?scene=cards`, `log`,
-// `agent`, `layout` (the real tabs) or `sidebar`; `&width=narrow` for a phone's width, `&theme=dark`.
+// `agent`, `layout` (the real tabs), `sidebar` (the details) or `rows` (sidebar rows); `&card=<n>` for
+// one card, `&width=narrow` for a phone's width, `&theme=dark`.
 import { createRoot } from "react-dom/client";
 import { useEffect, useRef, useState } from "react";
 
-import type { Build, BuildAgent, Plan, WorkMessage } from "@ace/channel/protocol";
+import type { Build, BuildAgent, BuildReview, GithubPull, Plan, WorkMessage } from "@ace/channel/protocol";
 import type { Listing } from "@ace/host/protocol";
 import {
 	BuildActionsProvider,
 	Main,
 	SessionDetailsView,
+	SessionSidebar,
+	type SidebarRow,
 	PlanActionsProvider,
 	Layout as Shell,
 	Timeline,
@@ -18,14 +21,18 @@ import {
 import "./styles.css";
 
 import { useAgentAvatar } from "./agent-avatar";
-import { agentAuthor, agentAuthors, agentName, buildCards } from "./build-card";
+import { ApprovalCard } from "./approval";
+import { approvalView } from "./approval-card";
+import { fixture, KINDS } from "./approval.fixtures";
+import { agentAuthor, agentAuthors, agentName, buildCards, planDetails } from "./build-card";
+import { Question } from "./question";
 import { publish } from "./details";
 import { CHAT, Layout } from "./layout/layout";
 import { WorkLog } from "./panels/work-log";
 import { planCards } from "./plan-card";
 import { withCards } from "./review-card";
 import { AGENT, toEvents } from "./timeline";
-import type { Item } from "./transcript";
+import type { Item, Tool } from "./transcript";
 
 const params = new URLSearchParams(location.search);
 document.documentElement.classList.toggle("dark", params.get("theme") === "dark");
@@ -72,7 +79,109 @@ const build = (patch: Partial<Build> = {}): Build => ({
 	...patch,
 });
 
-const CARDS: { label: string; build: Build }[] = [
+const BRANCH = "exports/build-p1";
+const SHA = "8b41d07e3c9a2f15d6b0e4a7c1f3d5b8e9a0c2d4";
+const DESK = `/review/${"a3".repeat(32)}/cycles/01JD3Q5V8X2K7M9N4P6R1S0T3W/desk`;
+
+const pull = (patch: Partial<GithubPull> = {}): GithubPull => ({
+	kind: "prs",
+	number: 128,
+	title: "Retry failed exports",
+	url: "https://github.com/neuve/exports/pull/128",
+	state: "open",
+	author: "vinicius",
+	created: "2026-11-23T14:10:00Z",
+	updated: "2026-11-23T15:02:00Z",
+	labels: [],
+	head: BRANCH,
+	sha: SHA,
+	checks: [
+		{ name: "test", state: "passed" },
+		{ name: "typecheck", state: "passed" },
+		{ name: "lint", state: "passed" },
+	],
+	merge: "ready",
+	...patch,
+});
+
+const review = (patch: Partial<BuildReview> = {}): BuildReview => ({
+	chat: 3,
+	review: "01JD3Q5V8X2K7M9N4P6R1S0T3W",
+	phase: "finished",
+	head: SHA,
+	humanRequired: 0,
+	desk: DESK,
+	...patch,
+});
+
+const DONE = [{ ...IMPLEMENTER, state: "done" as const }, { ...REVIEWER, state: "done" as const, caption: "Approved the retry counter" }];
+
+const QUESTION: Tool = {
+	call: "q-1",
+	name: "question",
+	args: {
+		questions: [{
+			header: "Export id",
+			question: "A retried export can keep its original id or take a new one. Which should it keep?",
+			options: [
+				{ label: "Original id", description: "Links people already shared keep working" },
+				{ label: "New id", description: "Each attempt is its own export in the history" },
+			],
+			multiple: false,
+		}],
+	},
+};
+
+const CARDS: { label: string; build: Build; pull?: GithubPull; asks?: boolean; height?: number }[] = [
+	{
+		label: "Draft pull request, checks running",
+		build: build({ branch: BRANCH, agents: [IMPLEMENTER, REVIEWER] }),
+		pull: pull({
+			state: "draft",
+			merge: "blocked",
+			checks: [{ name: "test", state: "pending" }, { name: "typecheck", state: "passed" }, { name: "lint", state: "pending" }],
+		}),
+	},
+	{
+		label: "Ready, with Merge",
+		build: build({ branch: BRANCH, agents: DONE, review: review() }),
+		pull: pull(),
+	},
+	{
+		label: "A review with units needing a person",
+		build: build({ branch: BRANCH, agents: DONE, review: review({ humanRequired: 3 }) }),
+		pull: pull({ merge: "blocked" }),
+	},
+	{
+		label: "Review running",
+		build: build({ branch: BRANCH, agents: [{ ...IMPLEMENTER, state: "done" }, REVIEWER], review: review({ phase: "running", humanRequired: undefined, desk: undefined }) }),
+		pull: pull({ state: "draft", merge: "blocked" }),
+	},
+	{
+		label: "Newer commits than the review",
+		build: build({ branch: BRANCH, agents: [IMPLEMENTER, { ...REVIEWER, state: "done" }], review: review({ humanRequired: 1 }) }),
+		pull: pull({ state: "draft", sha: "c41e9a07b2d3f58e6a1c0b9d7e2f4a3c5b8d0e1f", merge: "blocked", checks: [{ name: "test", state: "failed" }, { name: "lint", state: "passed" }] }),
+	},
+	{
+		label: "Conflicts with its base",
+		build: build({ branch: BRANCH, agents: DONE, review: review() }),
+		pull: pull({ merge: "conflicts" }),
+	},
+	{
+		label: "An agent waiting on a question",
+		build: build({
+			branch: BRANCH,
+			agents: [{ ...IMPLEMENTER, state: "waiting", caption: "Asking which id to keep" }, REVIEWER],
+		}),
+		pull: pull({ state: "draft", merge: "blocked" }),
+		asks: true,
+		height: 1180,
+	},
+	{
+		label: "Merged",
+		build: build({ branch: BRANCH, agents: DONE, review: review(), merged: { number: 128, at: T + 74 * 60_000 } }),
+		pull: pull({ state: "merged" }),
+	},
 	{ label: "One agent", build: build() },
 	{
 		label: "Waiting on the person, running and ended",
@@ -149,7 +258,11 @@ function items(): Item[] {
 	];
 }
 
-function Chat({ builds, onOpen = () => {} }: { builds: Build[]; onOpen?: (chat?: number) => void }) {
+function Chat({ builds, pulls, onOpen = () => {} }: {
+	builds: Build[];
+	pulls?: ReadonlyMap<string, GithubPull | null>;
+	onOpen?: (chat?: number) => void;
+}) {
 	let list = items();
 	let events = withCards(
 		toEvents(list, "harness", false, { text: "" }, {}, new Map(), {}, {}, {}, () => undefined, {}),
@@ -159,12 +272,17 @@ function Chat({ builds, onOpen = () => {} }: { builds: Build[]; onOpen?: (chat?:
 		"harness",
 		false,
 		true,
-		buildCards(builds, 1, name),
+		buildCards(builds, 1, name, pulls),
 	);
 	return (
 		<PlanActionsProvider value={{ mayApprove: true, open: () => {}, approve: async () => {} }}>
 			<BuildActionsProvider
-				value={{ mayStop: true, open: onOpen, stop: () => new Promise((resolve) => setTimeout(resolve, 600)) }}
+				value={{
+					mayStop: true,
+					open: onOpen,
+					stop: () => new Promise((resolve) => setTimeout(resolve, 600)),
+					merge: () => new Promise((_, reject) => setTimeout(() => reject(new Error("refused")), 1200)),
+				}}
 			>
 				<Timeline className="h-full min-h-0" events={events} currentUser={{ login: USER, own: [USER] }} />
 			</BuildActionsProvider>
@@ -298,6 +416,59 @@ function Agent({ chat }: { chat: BuildAgent }) {
 	);
 }
 
+/** The dock of the chat that planned a build: what its waiting agent asks, answered there. */
+function Asks() {
+	return (
+		<div className="shrink-0 px-3 pb-3">
+			<Question channel={listing("asks")} chat={2} call={QUESTION} user={USER} mayAnswer requester="Implementer" />
+			<ApprovalCard
+				view={approvalView(fixture(KINDS[0]!), name)}
+				mayAnswer
+				answer={() => {}}
+				requester="Implementer"
+			/>
+		</div>
+	);
+}
+
+const ROW = (patch: Partial<SidebarRow>): SidebarRow => ({
+	uid: patch.name ?? "row",
+	kind: "session",
+	name: "exports",
+	createdAt: Math.floor(T / 1000),
+	lifecycle: "live",
+	private: false,
+	mine: true,
+	member: true,
+	connection: "idle",
+	agent: "idle",
+	unreadCount: 0,
+	mentionCount: 0,
+	lastActivityAt: Math.floor(T / 1000),
+	online: [],
+	...patch,
+});
+
+/** Sidebar rows marked by their plans, beside an ordinary and an unread row. */
+function Rows() {
+	const rows = [
+		ROW({ name: "retry-exports", plans: { ready: true, humanRequired: 0 } }),
+		ROW({ name: "billing-sync", plans: { ready: false, humanRequired: 3 } }),
+		ROW({ name: "scheduler", needsAttention: "question" }),
+		ROW({ name: "ledger", plans: { ready: true, humanRequired: 0 }, mentionCount: 2 }),
+		ROW({ name: "importer", plans: { ready: false, humanRequired: 1 }, connection: "connected", agent: "thinking" }),
+		ROW({ name: "search-index", unreadCount: 1 }),
+		ROW({ name: "docs" }),
+	];
+	return (
+		<SessionSidebar
+			projectName="exports"
+			groups={[{ id: "mine", label: "Channels", rows }]}
+			className="h-full w-72"
+		/>
+	);
+}
+
 const LAYOUT = "build-harness";
 
 /** The real tab layout: the first agent opens the Work log behind the chat; new messages mark it. */
@@ -390,9 +561,29 @@ function Harness() {
 						))
 						: scene === "sidebar"
 						? (
-							<Frame label="Details sidebar" height={420}>
+							<Frame label="Details sidebar" height={720}>
 								<div className="w-72 p-3">
 									<SessionDetailsView
+										branch="exports/main-chat"
+										pull={null}
+										plans={planDetails(
+											[
+												build({ branch: BRANCH, review: review({ humanRequired: 3 }) }),
+												build({
+													id: `1:${"b".repeat(64)}`,
+													plan: { id: "p2", hash: "b".repeat(64), title: "Move the export timer", call: "write-2" },
+													approved: { by: USER, at: T + 90 * 60_000 },
+													branch: "exports/build-p2",
+												}),
+											],
+											new Map([[BRANCH, pull({ merge: "blocked" })], ["exports/build-p2", pull({
+												number: 131,
+												title: "Move the export timer",
+												state: "draft",
+												head: "exports/build-p2",
+												checks: [{ name: "test", state: "pending" }],
+											})]]),
+										)}
 										subagents={[{ id: "s1", task: "Read the export worker", model: "haiku", state: "done" }]}
 										workers={[IMPLEMENTER, { ...REVIEWER, state: "waiting" as const }, SECOND].map((agent) => ({
 											id: `build:${agent.chat}`,
@@ -411,9 +602,22 @@ function Harness() {
 								<Agent chat={chat} />
 							</Frame>
 						))
-						: CARDS.map((item) => (
-							<Frame key={item.label} label={item.label} height={item.build.agents.length > 2 ? 360 : 300}>
-								<Chat builds={[item.build]} />
+						: scene === "rows"
+						? (
+							<Frame label="Sidebar rows" height={340}>
+								<Rows />
+							</Frame>
+						)
+						: CARDS.filter((_, index) => !params.has("card") || params.get("card") === String(index)).map((item) => (
+							<Frame
+								key={item.label}
+								label={item.label}
+								height={item.height ?? (item.build.agents.length > 2 || item.pull ? 380 : 300)}
+							>
+								<div className="flex min-h-0 flex-1 flex-col">
+									<Chat builds={[item.build]} pulls={item.pull ? new Map([[BRANCH, item.pull]]) : undefined} />
+								</div>
+								{item.asks && <Asks />}
 							</Frame>
 						))}
 				</div>

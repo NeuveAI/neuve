@@ -26,6 +26,7 @@ import * as served from "./directory-server";
 import { retryLoginShell, shell } from "./environment";
 import type { GatewayClient, Watch } from "./gateway-client";
 import * as github from "./github";
+import { PullReaders } from "./pull-reader";
 import { describe, health, HostConflict } from "./health";
 import { seal } from "./keys";
 import * as lobby from "./lobby";
@@ -98,6 +99,7 @@ type Client = {
 	remotes: Map<string, GatewayClient>;
 	/** Detaches this client from the terminals it opened; the shells keep running. */
 	terminals: Map<string, () => void>;
+	pulls: Map<string, () => void>;
 	/** A host's socket to a lobby of the directory this host serves, not a gateway client. */
 	lobby?: served.Seat;
 };
@@ -106,6 +108,7 @@ let name = hostname();
 /** Where teammates reach the directory this host serves, once it's on the tailnet. */
 let servedUrl: string | undefined;
 let closing = false;
+let pulls: PullReaders;
 let updating = false;
 let update = 0;
 let suspending: Promise<unknown> | undefined;
@@ -157,6 +160,13 @@ async function local(): Promise<Listing[]> {
 		if (said) listing.said = said;
 		if (mentions) listing.mentions = mentions;
 		const { root, repo } = checkouts[index]!;
+		if (record.plans) {
+			const ready = repo !== undefined && record.plans.branches.some(branch => {
+				const pull = pulls.current(repo, branch);
+				return pull?.state === "open" && pull.merge === "ready";
+			});
+			listing.plans = { ...record.plans, ...(ready ? { ready } : {}) };
+		}
 		listing.root = root;
 		if (repo) listing.repo = repo;
 		if (hosted) listing.hosted = hosted;
@@ -526,7 +536,8 @@ const localOps = new Set<HostRequest["op"]>([
 	"github-list",
 	"github-detail",
 	"github-files",
-	"github-pull",
+	"github-pull-watch",
+	"github-pull-unwatch",
 	"settings",
 	"diagnostics",
 	"key-set",
@@ -795,8 +806,18 @@ async function handle(
 			return github.detail(request);
 		case "github-files":
 			return github.files(request.repo, request.number);
-		case "github-pull":
-			return github.pull(request.repo, request.branch);
+		case "github-pull-watch": {
+			const { repo, branch, subscription } = request;
+			const detach = pulls.watch(repo, branch, value =>
+				send({ githubPull: { subscription, repo, branch, ...value } }));
+			client.pulls.get(subscription)?.();
+			client.pulls.set(subscription, detach);
+			return;
+		}
+		case "github-pull-unwatch":
+			client.pulls.get(request.subscription)?.();
+			client.pulls.delete(request.subscription);
+			return;
 		case "settings":
 			if (request.fresh) {
 				void Promise.resolve().then(() => runtimeHooks().checkAccounts?.())
@@ -1094,6 +1115,7 @@ function websocket(): Bun.WebSocketHandler<Client> {
 			log("info", "gateway.close", { user: socket.data.user, peer: socket.data.peer, code });
 			releaseClient(socket.data);
 			for (const detach of socket.data.terminals.values()) detach();
+			for (const detach of socket.data.pulls.values()) detach();
 		},
 	};
 }
@@ -1108,6 +1130,7 @@ function client(user: string, peer: boolean, local = false, machine?: string): C
 		channels: new Map(),
 		remotes: new Map(),
 		terminals: new Map(),
+		pulls: new Map(),
 	};
 }
 
@@ -1355,6 +1378,7 @@ export type Gateway = {server: Server<Client>; stop(): Promise<void>};
 
 export async function start(port: number, loopback = false, script?: string, managed = false): Promise<Gateway> {
 	closing = false;
+	pulls = new PullReaders(github.pullGithub(), log, () => { if (!closing && !updating) void broadcast(); });
 	config.port = port;
 	config.loopback = loopback;
 	// Channel workers and agent shells reach this listener for the owner's windows.
@@ -1388,6 +1412,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	const servers = [server];
 	const cleanup: (() => void | Promise<void>)[] = [];
 	cleanup.push(accounts.onChange(accountsChanged));
+	cleanup.push(() => pulls.close());
 	// A blocked event loop fails the desktop's health check, which then cannot tell a busy helper from a stopped one.
 	let tick = performance.now();
 	const stalls = setInterval(() => {

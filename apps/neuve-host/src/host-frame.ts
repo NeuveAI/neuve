@@ -7,11 +7,24 @@ const listing = z.object({
 	id: z.string(), host: z.string(), name: z.string(), prefix: z.string().optional(), owner: z.string(), project: z.string(), created: z.number(),
 	state: z.enum(["running", "dormant", "archived", "offline"]), root: z.string().optional(), repo: z.string().optional(), hosted: z.string().optional(), compute: z.literal(true).optional(), computing: z.enum(["starting", "stopping"]).optional(), stopped: z.literal(true).optional(), moving: z.string().optional(), stalled: z.boolean().optional(), summary: z.string().optional(), revision: z.int().optional(), model: ModelRefSchema.optional(),
 	active: z.number().optional(), busy: z.boolean().optional(), ran: runEnd.optional(),
+	plans: z.object({ branches: z.array(z.string()).optional(), ready: z.boolean().optional(), humanRequired: z.int().nonnegative().optional(), waiting: z.boolean().optional() }).optional(),
 	said: z.object({ at: z.number(), author: z.string() }).optional(),
 	mentions: z.record(z.string(), z.number()).optional(),
 });
 
+const githubPull = z.object({
+	kind: z.enum(["prs", "issues"]), number: z.int().positive(), title: z.string(), url: z.string(),
+	state: z.enum(["open", "closed", "merged", "draft"]), author: z.string(), created: z.string(), updated: z.string(),
+	labels: z.array(z.object({ name: z.string(), color: z.string() })), head: z.string().optional(),
+	fork: z.boolean().optional(), sha: z.string().optional(),
+	checks: z.array(z.object({ name: z.string(), url: z.string().optional(), state: z.enum(["pending", "passed", "failed", "skipped"]) })),
+	review: z.enum(["approved", "changes", "required"]).optional(),
+	merge: z.enum(["ready", "blocked", "conflicts", "unknown"]).optional(),
+});
 const HostFrameSchema = z.union([
+	z.object({ githubPull: z.object({
+		subscription: z.string(), repo: z.string(), branch: z.string(), pull: githubPull.nullable(), error: z.string().optional(),
+	}) }),
 	z.object({ accounts: z.array(AccountStatus) }),
 	FrameSchema,
 	z.object({ hello: z.object({ user: z.string(), host: z.string(), github: z.string().optional(), team: z.string().optional(), directory: z.string().optional() }) }),

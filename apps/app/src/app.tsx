@@ -58,6 +58,7 @@ import { EmptyProjects, InitGit, OpenProject } from "./open-project";
 import { Palette } from "./palette";
 import { placement } from "./placement";
 import { present } from "./presence";
+import { usePulls } from "./pull";
 import { type AppProject, label, projects, title } from "./projects";
 import { RemoveProject } from "./remove-project";
 import { type Section, Settings } from "./settings";
@@ -193,6 +194,9 @@ function row(
 	attention?: Attention,
 ): SidebarRow {
 	const outcome = attention?.mark;
+	// An agent of a plan waiting on a question or permission request marks the row as a question does.
+	const { plans } = channel;
+	const asked = outcome === "question" || !!plans?.waiting;
 	const place = placement(channel);
 	// A host's channels are all its owner's, so this is also the host's owner-only check.
 	const own = channel.owner === user && channel.host === host;
@@ -228,11 +232,12 @@ function row(
 		host: channel.host,
 		stopped: place.kind === "cloud" && place.stopped,
 		// A run waiting on a question is still busy, but the row should show it waiting on them.
-		agent: channel.state === "running" && channel.busy && outcome !== "question"
-			? "thinking"
-			: "idle",
+		agent: channel.state === "running" && channel.busy && !asked ? "thinking" : "idle",
+		...(plans?.ready || plans?.humanRequired
+			? { plans: { ready: !!plans.ready, humanRequired: plans.humanRequired ?? 0 } }
+			: {}),
 		unreadCount: outcome === "done" || outcome === "message" ? 1 : 0,
-		needsAttention: outcome === "failed" || outcome === "question" ? outcome : undefined,
+		needsAttention: asked ? "question" : outcome === "failed" ? outcome : undefined,
 		mentionCount: attention?.mentions || 0,
 		lastActivityAt: Math.floor((channel.active || channel.created) / 1000),
 		online,
@@ -580,6 +585,15 @@ export function App() {
 		landed.current = true;
 		select(waiting);
 	});
+	// The host marks a plan ready only from a pull request someone watches, so the rows on screen watch theirs.
+	usePulls(
+		channels.flatMap((value) =>
+			value.repo && value.state !== "archived"
+				&& (allProjects || pins.includes(value.id) || visible.includes(value))
+				? (value.plans?.branches ?? []).map((branch) => [value.repo!, branch] as const)
+				: []
+		),
+	);
 	const online = (channel: Listing) =>
 		present(presence[channelProject(channel)], people[hello.user], channel.id);
 	let groups = projectGroups(visible, hello, people, now, collapsed, attention, pins, online);

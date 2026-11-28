@@ -5,7 +5,9 @@ import type {
 	Event,
 	GithubFilter,
 	GithubKind,
+	GithubPull,
 	ModelRef,
+	PlanSummary,
 	Request,
 	RunEnd,
 } from "@ace/channel/protocol";
@@ -37,7 +39,8 @@ export type MoveTarget = { target: string; label: string; place: "local" | "host
 export type WorkerInfo = { id: string; pid: number };
 /** `freeze` drains admitted requests and exits the worker for a move, or fails if work remains. */
 /** Only this host's own processes send these; the gateway refuses them from clients. */
-export type WorkerRequest = { op: "worker" } | { op: "freeze" } | { op: "export" };
+export type WorkerRequest =
+	| { op: "worker" } | { op: "freeze" } | { op: "export" };
 
 export type Diagnostics = {
 	tools: { name: string; path?: string; version?: string; account?: string; error?: string }[];
@@ -116,6 +119,7 @@ export type Listing = {
 	active?: number;
 	/** Live channel-wide run projection; absent on older hosts, never authoritative. */
 	busy?: boolean;
+	plans?: Partial<PlanSummary> & { ready?: boolean };
 	/** The latest invoked run's end; absent on older hosts and before a channel's first one. */
 	ran?: RunEnd;
 	/** The latest message a person or another channel's agent wrote; absent on older hosts. */
@@ -371,7 +375,8 @@ export type HostRequest =
 	}
 	| { op: "github-detail"; repo: string; kind: GithubKind; number: number }
 	| { op: "github-files"; repo: string; number: number }
-	| { op: "github-pull"; repo: string; branch: string }
+	| { op: "github-pull-watch"; repo: string; branch: string; subscription: string }
+	| { op: "github-pull-unwatch"; subscription: string }
 	/** These settings belong to the local owner and are never forwarded to peers. */
 	/** `fresh` reads again keys whose last read waited on a prompt; polls leave it out. */
 	| { op: "settings"; fresh?: boolean }
@@ -483,7 +488,11 @@ export type HostRequest =
 /** `trace` follows a request through every host and worker that relays it. */
 export type HostEnvelope = { id: number; trace?: string } & HostRequest;
 
+export type PullUpdate = { pull: GithubPull | null; error?: string };
+export type GithubPullFrame = PullUpdate & { subscription: string; repo: string; branch: string };
+
 export type HostFrame =
+	| { githubPull: GithubPullFrame }
 	| { accounts: AccountStatus[] }
 	| { id: number; ok: true; value: unknown }
 	| { id: number; ok: false; error: string }

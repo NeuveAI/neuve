@@ -15,6 +15,8 @@ import { PluginPreferences } from "./plugin-manifest";
 
 const channel = z.string();
 const terminal = z.string();
+const pullBranch = z.string().min(1).max(1024);
+const pullSubscription = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 /** Terminal dimensions a PTY accepts. */
 const size = z.int().min(1).max(1000);
 const chat = z.int().nonnegative().optional();
@@ -85,7 +87,8 @@ z.strictObject({ op: z.literal("project-clone"), repo: z.string(), path: z.strin
 z.strictObject({ op: z.literal("github-list"), repo: z.string(), kind: GithubKindSchema, state: GithubFilterSchema, search: z.string().max(4096), limit: z.int().min(1).max(1000) }),
 z.strictObject({ op: z.literal("github-detail"), repo: z.string(), kind: GithubKindSchema, number: z.int().positive() }),
 z.strictObject({ op: z.literal("github-files"), repo: z.string(), number: z.int().positive() }),
-z.strictObject({ op: z.literal("github-pull"), repo: z.string(), branch: z.string().min(1) }),
+z.strictObject({ op: z.literal("github-pull-watch"), repo: z.string(), branch: pullBranch, subscription: pullSubscription }),
+z.strictObject({ op: z.literal("github-pull-unwatch"), subscription: pullSubscription }),
 z.strictObject({ op: z.literal("settings"), fresh: z.boolean().optional() }),
 z.strictObject({ op: z.literal("preferences"), model: ModelRefSchema.nullable().optional(), folder: z.string().optional(), plugins: PluginPreferences.optional(), compute: z.object({ enabled: z.boolean(), url: z.string().nullable() }).optional() }),
 z.strictObject({ op: z.literal("folder") }),
@@ -192,7 +195,8 @@ export function parseHostEnvelope(text: string, verified: string): HostEnvelope 
 export function parseWorkerEnvelope(text: string): { id: number; trace?: string } & (WorkerRequest | import("@ace/channel/protocol").Request | import("@ace/channel/operations-protocol").ExtensionRequest | import("./native-source-protocol").NativeSourceRequest) {
 	const envelope = EnvelopeSchema.parse(JSON.parse(text));
 	const { id, trace, ...body } = envelope;
-	const parsed = z.union([z.strictObject({ op: z.literal("worker") }), z.strictObject({op: z.literal("freeze")}), z.strictObject({op: z.literal("export")}), RequestSchema, ExtensionRequestSchema, NativeSourceRequestSchema]).parse(body);
+	const parsed = z.union([z.strictObject({ op: z.literal("worker") }), z.strictObject({op: z.literal("freeze")}), z.strictObject({op: z.literal("export")}),
+		RequestSchema, ExtensionRequestSchema, NativeSourceRequestSchema]).parse(body);
 	return { id, ...(trace === undefined ? {} : { trace }), ...parsed };
 }
 
