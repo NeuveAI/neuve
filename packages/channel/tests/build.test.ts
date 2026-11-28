@@ -539,6 +539,7 @@ test("a plan's pull request follows its pushed and reviewed head through merge",
 	const log: string[] = [];
 	const created: string[] = [];
 	const mergeHeads: string[] = [];
+	let views = 0;
 	let project: string;
 	let origin: string;
 	let plans: Parameters<NonNullable<Fixture["options"]["onPlans"]>>[0];
@@ -575,6 +576,7 @@ test("a plan's pull request follows its pushed and reviewed head through merge",
 				const pull = pulls.get(branch) ?? [...pulls.values()].find(pull => String(pull.number) === selector);
 				if (!pull) throw new Error(`no pull requests found for branch "${branch}"`);
 				if (group === "pr" && command === "view") {
+					views++;
 					if (pull.state === "OPEN") pull.headRefOid = git(origin, "rev-parse", `refs/heads/${pull.branch}`).trim();
 					return JSON.stringify(pull);
 				}
@@ -596,7 +598,7 @@ test("a plan's pull request follows its pushed and reviewed head through merge",
 			},
 		},
 	});
-	const { fixture, watch, worktrees } = run;
+	const { fixture, watch, worktrees, runs } = run;
 	project = fixture.project;
 	origin = join(fixture.root, "scratch origin");
 	git(fixture.root, "clone", "--bare", "-q", project, origin);
@@ -633,56 +635,74 @@ test("a plan's pull request follows its pushed and reviewed head through merge",
 	});
 
 	let update = 0;
-	async function publish(chat: number, review: string, head: string) {
+	async function saveReview(chat: number, review: string, head: string, phase: "finished" | "queued" = "finished") {
 		const card: Extract<ReviewCard, { kind: "review" }> = {
 			kind: "review", review, source: "lane", label: "Review the plan", recovered: false, notify: false,
-			range: { branch, base: firstHead, head, commits: 1 }, phase: "finished", stage: null, stages: [],
-			finished: { units: 2, byReviewLane: { humanRequired: 2, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 2, complete: true, gaps: 0, undecoded: 0 },
-			links: { batch: "/batch", desk: "/desk" }, stopped: null, newCommits: null, updatedAt: ++update,
+			range: { branch, base: firstHead, head, commits: 1 }, phase, stage: null, stages: [],
+			finished: phase === "finished" ? { units: 2, byReviewLane: { humanRequired: 2, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 2, complete: true, gaps: 0, undecoded: 0 } : null,
+			links: phase === "finished" ? { batch: "/batch", desk: "/desk" } : null,
+			stopped: null, newCommits: null, updatedAt: ++update,
 		};
 		await run.harness.commit(async tx => {
 			(await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards[review] = card;
 		}, context);
+	}
+	async function publish(chat: number, review: string, head: string) {
+		await saveReview(chat, review, head);
 		const event = await watch.until("builds", event => event.builds[0]?.review?.review === review);
 		expect(EventSchema.parse(event)).toEqual(event);
 		return event.builds[0]!.review;
 	}
-	await publish(chat, "implementer-review", firstHead);
-	await until(() => fixture.channel.isIdle());
+	async function endImplementerRun() {
+		const prior = runs.length;
+		fixture.script(fauxAssistantMessage("Work finished."));
+		await fixture.request({ op: "wait", submission: await wake(run, "Check export retries.", chat) });
+		await until(() => runs.slice(prior).some(event => event.chat === chat && event.outcome === "done"));
+	}
+	await saveReview(chat, "zzz-implementer-review", firstHead);
+	await endImplementerRun();
 	expect(pull.isDraft).toBe(true);
+	expect(plans?.humanRequired).toBeUndefined();
 	expect(await publish(reviewer.chat, "reviewer-review-1", firstHead)).toEqual({
 		chat: reviewer.chat, review: "reviewer-review-1", phase: "finished", head: firstHead, humanRequired: 2, desk: "/desk",
 	});
 	await until(() => !pull.isDraft);
 	expect(plans).toMatchObject({ branches: [branch], humanRequired: 2 });
+	await until(() => fixture.channel.isIdle());
+	const readyViews = views;
+	await saveReview(reviewer.chat, "reviewer-review-2", firstHead, "queued");
+	await saveReview(reviewer.chat, "reviewer-review-1", firstHead);
+	await until(() => fixture.channel.isIdle());
+	expect(views).toBe(readyViews);
 
-	git(firstLane.path, "commit", "--allow-empty", "-qm", "Cover one more retry");
-	const head = git(firstLane.path, "rev-parse", "HEAD").trim();
-	await publish(reviewer.chat, "reviewer-review-2", head);
-	await publish(reviewer.chat, "reviewer-review-3", firstHead);
-	expect(pull.isDraft).toBe(false);
-	git(firstLane.path, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
-	fixture.script(fauxAssistantMessage("New head pushed."));
-	await fixture.request({ op: "wait", submission: await wake(run, "Cover another retry.", chat) });
+	const head = push("Cover one more retry");
+	const request = { op: "build-merge", author: OWNER, build: build.id, number: 11, head } satisfies Request;
+	await expect(fixture.request(request)).rejects.toThrow("The plan's reviewer has not finished a review of this pull request head.");
+	expect(pull.state).toBe("OPEN");
+	expect(mergeHeads).toEqual([]);
+	await expect(fixture.request({ ...request, head: firstHead })).rejects.toThrow("Head commit has changed since the last review.");
+	await endImplementerRun();
 	await until(() => pull.isDraft);
 	expect(pull.headRefOid).toBe(head);
-	await publish(reviewer.chat, "reviewer-review-4", head);
+	await publish(reviewer.chat, "reviewer-review-2", head);
 	await until(() => !pull.isDraft);
+	await saveReview(reviewer.chat, "reviewer-review-1", firstHead);
+	await until(() => fixture.channel.isIdle());
 
-	const request = { op: "build-merge", author: OWNER, build: build.id, number: 11, head } satisfies Request;
 	await expect(fixture.request({ ...request, author: "teammate" })).rejects.toThrow("only its owner");
 	await expect(fixture.request({ ...request, author: "agent@other" })).rejects.toThrow("Only a person");
-	await expect(fixture.request({ ...request, head: firstHead })).rejects.toThrow("Head commit has changed since the last review.");
 	expect(pull.state).toBe("OPEN");
 	expect(await Bun.file(join(firstLane.path, "README.md")).exists()).toBe(true);
 
 	const [, dirtyLane, movedLane] = worktrees;
+	git(dirtyLane!.path, "reset", "--hard", head);
 	await writeFile(join(dirtyLane!.path, "local.txt"), "uncommitted review notes");
 	await Promise.all([fixture.request(request), fixture.request(request)]);
 	const merged = await watch.until("builds", event => event.builds[0]?.merged?.number === 11);
 	expect(EventSchema.parse(merged)).toEqual(merged);
 	expect(merged.builds[0]).toMatchObject({
-		merged: { number: 11 }, agents: [{ state: "done" }, { state: "done" }, { state: "done" }],
+		merged: { number: 11 }, review: { review: "reviewer-review-2", head },
+		agents: [{ state: "done" }, { state: "done" }, { state: "done" }],
 	});
 	expect(pull.state).toBe("MERGED");
 	expect(mergeHeads).toEqual([firstHead, head]);
@@ -690,6 +710,7 @@ test("a plan's pull request follows its pushed and reviewed head through merge",
 	expect(await Bun.file(join(firstLane.path, "README.md")).exists()).toBe(false);
 	expect(git(project, "branch", "--list", branch)).toBe("");
 	expect(await readFile(join(dirtyLane!.path, "local.txt"), "utf8")).toBe("uncommitted review notes");
+	expect(await Bun.file(join(movedLane!.path, "README.md")).exists()).toBe(true);
 	expect(git(project, "rev-parse", `refs/heads/${movedLane!.branch}`).trim()).toBe(firstHead);
 	const recorded = (await run.harness.snapshot(LanesDoc, context))!.lanes;
 	expect(Object.values(recorded).map(lane => lane.path)).toEqual(expect.arrayContaining([dirtyLane!.path, movedLane!.path]));

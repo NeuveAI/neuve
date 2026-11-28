@@ -21,20 +21,29 @@ function detail(number: number, branch: string, state: "open" | "closed" | "merg
 	};
 }
 
-function transport(route: (url: URL, request: RequestInit) => Response | undefined) {
-	return pullGithub(Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-		const url = new URL(String(input));
-		expect(url.origin).toBe("https://api.github.com");
-		expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fake");
-		if (url.pathname === "/graphql" && String(init?.body).includes("reviewDecision")) {
-			return Response.json({ data: { node: { reviewDecision: "APPROVED" } } });
+function transport(route: (url: URL, etag: string | null) => Response | undefined) {
+	return pullGithub(async (args, _body, _cwd, signal) => {
+		signal?.throwIfAborted();
+		expect(args[0]).toBe("api");
+		if (args[1] === "graphql") {
+			expect(args.join(" ")).toContain("reviewDecision");
+			expect(args.slice(-2)).toEqual(["--jq", ".data.node.reviewDecision"]);
+			return { out: "APPROVED\n", error: "", code: 0 };
 		}
-		const served = route(url, init ?? {});
-		if (served) return served;
-		if (url.pathname.endsWith("/check-runs")) return Response.json({ check_runs: [] });
-		if (url.pathname.endsWith("/status")) return Response.json({ statuses: [] });
-		throw new Error(`Unexpected request ${init?.method ?? "GET"} ${url}`);
-	}, { preconnect: () => {} }), async () => "fake");
+		expect(args[1]).toBe("-i");
+		const url = new URL(args.at(-1)!, "https://api.github.com");
+		const etag = args[args.indexOf("-H") + 1]?.match(/^If-None-Match: (.+)$/)?.[1] ?? null;
+		const response = route(url, etag)
+			?? (url.pathname.endsWith("/check-runs") ? Response.json({ check_runs: [] })
+				: url.pathname.endsWith("/status") ? Response.json({ statuses: [] }) : undefined);
+		if (!response) throw new Error(`Unexpected request ${url}`);
+		const { status } = response;
+		const headers = [...response.headers].map(([name, value]) => `${name === "etag" ? "ETag" : name}: ${value}\r\n`).join("");
+		return {
+			out: `HTTP/2.0 ${status} ${status === 304 ? "Not Modified" : "OK"}\n${headers}\r\n${await response.text()}`,
+			code: status === 304 ? 1 : 0, error: status === 304 ? "gh: HTTP 304" : "",
+		};
+	});
 }
 
 async function until(predicate: () => boolean) {
@@ -82,8 +91,7 @@ test("overlapping watches share a conditional refresh and see the latest checks"
 	const details: (string | null)[] = [];
 	const checks: (string | null)[] = [];
 	let finds = 0;
-	const github = transport((url, request) => {
-		const tag = new Headers(request.headers).get("if-none-match");
+	const github = transport((url, tag) => {
 		if (url.pathname.endsWith("/pulls")) {
 			finds++;
 			expect(url.searchParams.get("head")).toBe(`owner:${branch}`);
@@ -126,9 +134,9 @@ test("overlapping watches share a conditional refresh and see the latest checks"
 test("a repeat watch discovers a newly published draft in the channel repository", async () => {
 	let published = false;
 	const reads: (string | null)[] = [];
-	const github = transport((url, request) => {
+	const github = transport((url, tag) => {
 		if (url.pathname.endsWith("/pulls")) {
-			reads.push(new Headers(request.headers).get("if-none-match"));
+			reads.push(tag);
 			const fork = detail(99, branch);
 			fork.head.repo.full_name = "owner/fork";
 			return published ? Response.json([fork, detail(7, branch, "open", true)])
@@ -169,6 +177,50 @@ test("a watch discovers a replacement after the previous pull request merged", a
 		await until(() => reopened.values.at(-1)?.pull?.number === 8);
 		expect(card.values.map(value => value.pull?.state)).toEqual(["merged", "open"]);
 		expect(readers.current(repo, branch)?.number).toBe(8);
+	} finally {
+		readers.close();
+	}
+});
+
+test.each(["closed", "merged"] as const)("a watched pull request stops refreshing when it is %s", async state => {
+	let reads = 0;
+	const github = transport(url => {
+		if (url.pathname.endsWith("/pulls")) return Response.json([detail(7, branch)]);
+		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch, ++reads === 1 ? "open" : state));
+	});
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10 });
+	try {
+		const card = updates(readers, branch);
+		await until(() => card.values.at(-1)?.pull?.state === state);
+		await Bun.sleep(50);
+		expect(card.values.map(value => value.pull?.state)).toEqual(["open", state]);
+		expect(reads).toBe(2);
+	} finally {
+		readers.close();
+	}
+});
+
+test("the reader stops refreshing when the last view leaves", async () => {
+	let reads = 0;
+	const github = transport(url => {
+		if (url.pathname.endsWith("/pulls")) return Response.json([detail(7, branch)]);
+		if (url.pathname.endsWith("/pulls/7")) {
+			reads++;
+			return Response.json(detail(7, branch));
+		}
+	});
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10 });
+	try {
+		const card = updates(readers, branch);
+		const sidebar = updates(readers, branch);
+		await until(() => sidebar.values.length > 0);
+		card.stop();
+		await until(() => reads >= 2);
+		sidebar.stop();
+		const stoppedAt = reads;
+		await Bun.sleep(50);
+		expect(reads).toBe(stoppedAt);
+		expect(readers.current(repo, branch)).toBeUndefined();
 	} finally {
 		readers.close();
 	}

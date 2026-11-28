@@ -14,7 +14,7 @@ import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
 import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, failureCaption, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type BuildReview, type Effort, type ModelRef, type PlanSummary, type Request, type WorkMessage } from "./protocol";
-import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
+import { ReviewCardsDoc } from "./review-cards";
 import { content, draft, text as messageText } from "./room";
 
 declare const crypto: { randomUUID(): string };
@@ -74,7 +74,6 @@ type StoredBuild = {
 	starts: Record<string, Start>;
 	revision?: { requests: Record<string, string> };
 	stopping?: { chat: ConversationId; running: boolean }[];
-	finishedReview?: { humanRequired: number };
 };
 
 type StoredMessage = {
@@ -387,10 +386,10 @@ export class Builds {
 		const branches: string[] = [];
 		let humanRequired = 0;
 		let waiting = false;
-		for (const { build, finishedReview } of Object.values(this.#document?.records ?? {})) {
+		for (const { build } of Object.values(this.#document?.records ?? {})) {
 			if (build.merged || build.state.kind === "stopped") continue;
 			if (build.branch) branches.push(build.branch);
-			humanRequired += finishedReview?.humanRequired ?? build.review?.humanRequired ?? 0;
+			humanRequired += build.review?.humanRequired ?? 0;
 			waiting ||= build.agents.some(agent => agent.state === "waiting");
 		}
 		if (branches.length || humanRequired || waiting) {
@@ -399,9 +398,13 @@ export class Builds {
 	}
 
 	async refreshReviews(chats?: readonly number[]) {
-		const ids = chats ? new Set(chats.flatMap(chat => this.agent(chat)?.build ?? []))
+		const ids = chats ? new Set(chats.flatMap(chat => {
+			const agent = this.agent(chat);
+			return agent?.role === "reviewer" ? [agent.build] : [];
+		}))
 			: new Set(Object.keys(this.#document?.records ?? {}));
 		if (!ids.size) return;
+		const finished = new Set<string>();
 		await this.#track(this.harness.commit(async tx => {
 			const { records } = await tx.doc(BuildsDoc);
 			for (const id of ids) {
@@ -409,39 +412,16 @@ export class Builds {
 				if (!record) continue;
 				const { build, starts } = record;
 				build.branch ??= starts[firstImplementer]?.worktree?.branch;
-				let latest: { chat: number; card: Extract<ReviewCard, { kind: "review" }> } | undefined;
-				let finished: Extract<ReviewCard, { kind: "review" }> | undefined;
-				for (const { chat } of build.agents) {
-					for (const card of Object.values((await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards)) {
-						if (card.kind !== "review") continue;
-						if (!latest || card.updatedAt > latest.card.updatedAt) latest = { chat, card };
-						if (card.phase !== "finished") continue;
-						// Review IDs are time-ordered. Old cards can be updated when the branch moves.
-						if (!finished || card.review > finished.review) finished = card;
-					}
+				const review = await this.#finishedReview(tx, build);
+				if (chats && review && (build.review?.phase !== "finished" || build.review.review !== review.review)) {
+					finished.add(id);
 				}
-				const finishedReview = finished && {
-					humanRequired: finished.finished?.byReviewLane.humanRequired ?? 0,
-				};
-				if (JSON.stringify(record.finishedReview) !== JSON.stringify(finishedReview)) {
-					if (finishedReview) record.finishedReview = finishedReview;
-					else delete record.finishedReview;
-				}
-				if (!latest) continue;
-				const { chat, card } = latest;
-				const review: BuildReview = {
-					chat, review: card.review, phase: card.phase, head: card.range.head,
-					...(card.finished ? { humanRequired: card.finished.byReviewLane.humanRequired } : {}),
-					...(card.links ? { desk: card.links.desk } : {}),
-				};
-				if (JSON.stringify(build.review) !== JSON.stringify(review)) build.review = review;
+				if (JSON.stringify(build.review) === JSON.stringify(review)) continue;
+				if (review) build.review = review;
+				else delete build.review;
 			}
 		}, context));
-		const reviewers = new Set(chats?.flatMap(chat => {
-			const agent = this.agent(chat);
-			return agent?.role === "reviewer" ? [agent.build] : [];
-		}));
-		await Promise.all([...reviewers].map(id => this.#syncPull(id, false)));
+		await Promise.all([...finished].map(id => this.#syncPull(id, false)));
 	}
 
 	async #syncPull(id: string, ended: boolean) {
@@ -454,7 +434,6 @@ export class Builds {
 		await this.#track(this.options.admit(build.chat, async () => {
 			const current = (await this.harness.snapshot(BuildsDoc, context))?.records[id]?.build;
 			if (!current || current.merged) return;
-			if (!ended && !await this.#reviewedHead(current)) return;
 			let pull = await viewPull(commands, branch);
 			if (!pull && ended) {
 				const ref = `refs/heads/${branch}`;
@@ -474,7 +453,7 @@ export class Builds {
 			}
 			if (pull?.state !== "OPEN") return;
 			const { number, headRefOid: head, isDraft } = pull;
-			const reviewedHead = await this.#reviewedHead(current);
+			const reviewedHead = (await this.harness.commit(tx => this.#finishedReview(tx, current), context))?.head;
 			const fields = { repo, branch, number, head };
 			if (isDraft && head === reviewedHead) {
 				await gh(["pr", "ready", String(number), "--repo", repo]);
@@ -486,16 +465,21 @@ export class Builds {
 		}).catch(error => this.log("warn", "pull.sync.failed", { repo, branch, ...failure(error) })));
 	}
 
-	async #reviewedHead(build: Build): Promise<string | undefined> {
-		let newest: Extract<ReviewCard, { kind: "review" }> | undefined;
+	async #finishedReview(tx: Tx, build: Build): Promise<BuildReview | undefined> {
+		let newest: BuildReview | undefined;
 		for (const { chat, role } of build.agents) {
 			if (role !== "reviewer") continue;
-			const reviews = await this.harness.snapshot(ReviewCardsDoc, chat as ConversationId, context);
-			for (const card of Object.values(reviews?.cards ?? {})) {
-				if (card.kind === "review" && card.phase === "finished" && (!newest || card.review > newest.review)) newest = card;
+			for (const card of Object.values((await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards)) {
+				// Review IDs are time-ordered. Old cards can be updated when the branch moves.
+				if (card.kind !== "review" || card.phase !== "finished" || newest && card.review <= newest.review) continue;
+				newest = {
+					chat, review: card.review, phase: card.phase, head: card.range.head,
+					...(card.finished ? { humanRequired: card.finished.byReviewLane.humanRequired } : {}),
+					...(card.links ? { desk: card.links.desk } : {}),
+				};
 			}
 		}
-		return newest?.range.head;
+		return newest;
 	}
 
 	async mergePull({ build: id, number, head, author }: Extract<Request, { op: "build-merge" }>) {
@@ -510,7 +494,11 @@ export class Builds {
 				const saved = (await this.harness.snapshot(BuildsDoc, context))?.records[id]?.build;
 				if (saved?.merged?.number === number) return;
 				const pull = await viewPull(commands, branch);
-				if (!pull || pull.number !== number || saved?.merged) throw new Error("This pull request belongs to a different plan.");
+				if (!saved || !pull || pull.number !== number || saved.merged) throw new Error("This pull request belongs to a different plan.");
+				const review = await this.harness.commit(tx => this.#finishedReview(tx, saved), context);
+				if (head !== review?.head) {
+					throw new Error("The plan's reviewer has not finished a review of this pull request head.");
+				}
 				const fields = { repo, branch, number, head };
 				try {
 					if (pull.state !== "MERGED") {
@@ -555,8 +543,14 @@ export class Builds {
 			for (const { lane, worktree, chat } of lanes) {
 				if (!worktree) continue;
 				const { path, branch } = worktree;
+				const ref = `refs/heads/${branch}`;
+				const tip = await git(["rev-parse", "--verify", ref]);
+				if (tip.status !== 0 || tip.stdout.trim() !== head) {
+					this.log("warn", "build.lane.kept", { branch, path, reason: tip.stderr.trim() || "The lane branch is at a different head." });
+					continue;
+				}
 				const removed = await git(["worktree", "remove", "--", path]);
-				const result = removed.status === 0 ? await git(["update-ref", "-d", `refs/heads/${branch}`, head]) : removed;
+				const result = removed.status === 0 ? await git(["update-ref", "-d", ref, head]) : removed;
 				if (result.status !== 0) {
 					this.log("warn", "build.lane.kept", { branch, path, reason: result.stderr.trim() || "Git did not complete the lane cleanup." });
 					continue;

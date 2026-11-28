@@ -1,12 +1,16 @@
 import "./fixtures/memory-secrets";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Channel } from "@ace/channel";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { git } from "../../../packages/channel/tests/helpers";
 import { config } from "../src/host-config";
-import { openWorkerStorage } from "../src/worker-runtime";
+import { openChannel, openWorkerStorage } from "../src/worker-runtime";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -17,6 +21,41 @@ const place = () => {
 	roots.push(root);
 	return root;
 };
+
+test("the worker's pull request Git runner reads the scratch origin", async () => {
+	const project = place();
+	const origin = join(place(), "scratch origin");
+	git(project, "init", "-q", "-b", "main");
+	git(project, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "Initial");
+	git(project, "clone", "--bare", "-q", project, origin);
+	git(project, "remote", "add", "origin", origin);
+	git(project, "remote", "add", "upstream", "https://github.com/owner/project.git");
+	const head = git(project, "rev-parse", "HEAD").trim();
+	const state = place();
+	const open = spyOn(Channel, "open");
+	const lanes = config.lanes;
+	config.lanes = place();
+	let channel: Channel | undefined;
+	try {
+		channel = await openChannel({
+			id: "scratch", name: "scratch", owner: "owner", project, models: createModels(),
+			storage: await openNodeSqliteStorage(join(state, "channel.sqlite")),
+			env: cwd => new NodeExecutionEnv({ cwd }),
+			directory: { self: { id: "scratch", name: "scratch" }, list: async () => [], deliver: async () => {} },
+			log: () => {},
+		}, state);
+		const pulls = open.mock.calls[0]?.[0].build?.pulls;
+		expect(pulls?.repo).toBe("owner/project");
+		expect(await pulls?.git(["ls-remote", "--symref", "origin", "HEAD"])).toEqual({
+			status: 0, stdout: `ref: refs/heads/main\tHEAD\n${head}\tHEAD\n`, stderr: "",
+		});
+	} finally {
+		open.mockRestore();
+		if (lanes === undefined) Reflect.deleteProperty(config, "lanes");
+		else config.lanes = lanes;
+		await channel?.close();
+	}
+});
 
 test("source acquisition precedes mutable native open and cleanup follows joined capture and native close exactly once", async () => {
 	const root = place(),

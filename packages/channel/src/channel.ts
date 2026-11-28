@@ -597,10 +597,7 @@ export class Channel {
 					continue;
 				}
 				if (change.record.kind === ReviewCardsDoc.definition.kind && change.record.scope.kind === "conversation") {
-					const cards = (change.value as { cards: Record<string, ReviewCard> } | null)?.cards;
-					if (Object.values(cards ?? {}).some(card => card.kind === "review")) {
-						reviewed.push(change.record.scope.conversationId);
-					}
+					reviewed.push(change.record.scope.conversationId);
 				}
 				if (change.record.kind !== LiveDoc.definition.kind) continue;
 				const { scope } = change.record;
@@ -644,10 +641,8 @@ export class Channel {
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
 		});
-		if (options.onPlans) {
-			await channel.#builds.refreshReviews();
-			channel.#publishPlans();
-		}
+		await channel.#builds.refreshReviews();
+		channel.#publishPlans();
 		if (options.relocate) {
 			await harness.commit(async (tx) => {
 				let cursor: Cursor | undefined;

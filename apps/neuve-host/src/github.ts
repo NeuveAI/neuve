@@ -167,22 +167,24 @@ export function environment(): NodeJS.ProcessEnv {
 	return env;
 }
 
-async function spawnGh(args: string[], body?: string, cwd?: string) {
+async function spawnGh(args: string[], body?: string, cwd?: string, signal?: AbortSignal) {
 	const path = Bun.which("gh", { PATH: process.env.PATH });
 	if (!path) throw new Error("Install GitHub CLI on this host, then sign in with gh auth login.");
 	const child = Bun.spawn([path, ...args], {
 		cwd,
-		env: environment(),
+		env: signal ? { ...environment(), NO_COLOR: "1" } : environment(),
 		stdin: body === undefined ? "ignore" : new Blob([body]),
 		stdout: "pipe",
 		stderr: "pipe",
-		timeout: 30_000,
+		timeout: signal ? 15_000 : 30_000,
+		signal,
 	});
 	const [out, error, code] = await Promise.all([
 		new Response(child.stdout).text(),
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
+	signal?.throwIfAborted();
 	return { out, error: error.trim(), code };
 }
 
@@ -193,10 +195,14 @@ export async function runGh(args: string[], body?: string): Promise<string> {
 	return out;
 }
 
-async function gh<T>(args: string[]): Promise<T> {
-	const { out, error, code } = await spawnGh(args);
+function checkGh({ code, error }: { code: number; error: string }) {
 	if (code === 4) throw new Error("Sign in to GitHub on this host with gh auth login.");
 	if (code !== 0) throw new Error(sentence(error) || "GitHub did not respond. Try again.");
+}
+
+async function gh<T>(args: string[]): Promise<T> {
+	const { out, error, code } = await spawnGh(args);
+	checkGh({ code, error });
 	return JSON.parse(out) as T;
 }
 
@@ -447,56 +453,30 @@ const CheckRuns = z.object({ check_runs: z.array(z.object({
 const Statuses = z.object({ statuses: z.array(z.object({
 	context: z.string(), target_url: z.string().nullable(), state: z.string(),
 })) });
-const GithubError = z.object({ message: z.string() });
 type PullDetail = z.infer<typeof PullDetail>;
 
-async function token(): Promise<string> {
-	const env = environment();
-	if (env.GH_TOKEN) return env.GH_TOKEN;
-	const executable = Bun.which("gh", { PATH: process.env.PATH });
-	if (!executable) throw new Error("Install GitHub CLI on this host, then sign in with gh auth login.");
-	const child = Bun.spawn([executable, "auth", "token", "--hostname", "github.com"], {
-		env, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 5000,
-	});
-	const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-	if (code !== 0 || !out.trim()) throw new Error("Sign in to GitHub on this host with gh auth login.");
-	return out.trim();
-}
-
 type Cache = Map<string, { etag: string | null; value: unknown; next: string | undefined }>;
-export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = token) {
-	async function request(path: string, options: {
-		signal: AbortSignal; etag?: string | null; body?: object;
-	}): Promise<Response> {
-		const { signal, body, etag } = options;
-		const url = new URL(path, "https://api.github.com");
-		if (url.origin !== "https://api.github.com") throw new Error("GitHub returned an invalid link.");
-		const response = await fetcher(url, {
-			method: body ? "POST" : "GET", signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-			headers: {
-				accept: "application/vnd.github+json", authorization: `Bearer ${await signIn()}`,
-				"x-github-api-version": "2022-11-28",
-				...(etag ? { "if-none-match": etag } : {}),
-				...(body ? { "content-type": "application/json" } : {}),
-			},
-			...(body ? { body: JSON.stringify(body) } : {}),
-		});
-		if (response.ok || response.status === 304) return response;
-		const error = GithubError.safeParse(await response.json().catch(() => null));
-		const detail = error.success ? error.data.message : `GitHub refused the request (HTTP ${response.status})`;
-		throw new Error(/[.!?]$/.test(detail) ? detail : `${detail}.`);
-	}
-
+export function pullGithub(run = spawnGh) {
 	async function read<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
 		const saved = cache.get(path);
-		const response = await request(path, { signal, etag: saved?.etag });
-		const row = response.status === 304 && saved ? saved : {
-			etag: response.headers.get("etag"), value: await response.json(),
-			next: /<([^>]+)>; rel="next"/.exec(response.headers.get("link") ?? "")?.[1],
+		const url = new URL(path, "https://api.github.com");
+		if (url.origin !== "https://api.github.com") throw new Error("GitHub returned an invalid link.");
+		const args = ["api", "-i", ...(saved?.etag ? ["-H", `If-None-Match: ${saved.etag}`] : []),
+			`${url.origin}${url.pathname}${url.search}`];
+		const result = await run(args, undefined, "/", signal);
+		const status = Number(/^HTTP\/\S+ (\d{3})\b/.exec(result.out)?.[1]);
+		if (status === 304 && saved) return { ...saved, value: schema.parse(saved.value), status };
+		checkGh(result);
+		const separator = /\r?\n\r?\n/.exec(result.out);
+		if (!separator || !Number.isFinite(status)) throw new Error("GitHub CLI returned an invalid HTTP response.");
+		const headers = result.out.slice(0, separator.index);
+		const row = {
+			etag: /^etag:[ \t]*(.+)/im.exec(headers)?.[1].trim() ?? null,
+			value: schema.parse(JSON.parse(result.out.slice(separator.index + separator[0].length))),
+			next: /<([^>]+)>; rel="next"/.exec(/^link:[ \t]*(.+)/im.exec(headers)?.[1] ?? "")?.[1],
 		};
-		const value = schema.parse(row.value);
 		cache.set(path, row);
-		return { value, status: response.status, next: row.next };
+		return { ...row, status };
 	}
 
 	async function pages<T>(path: string, schema: z.ZodType<T>, signal: AbortSignal, cache: Cache) {
@@ -540,14 +520,12 @@ export function pullGithub(fetcher: typeof globalThis.fetch = fetch, signIn = to
 			];
 		},
 		async review(id: string, signal: AbortSignal) {
-			const response = await request("/graphql", {
-				signal,
-				body: { query: "query($id: ID!) { node(id: $id) { ... on PullRequest { reviewDecision } } }", variables: { id } },
-			});
-			const result = z.object({ data: z.unknown().optional(), errors: z.array(GithubError).optional() }).parse(await response.json());
-			if (result.errors?.length) throw new Error(sentence(result.errors.map(error => error.message).join(" ")));
-			const { node } = z.object({ node: z.object({ reviewDecision: z.string().nullable() }) }).parse(result.data);
-			return REVIEWS[node.reviewDecision ?? ""];
+			const response = await run(["api", "graphql", "-f",
+				"query=query($id: ID!) { node(id: $id) { ... on PullRequest { reviewDecision } } }",
+				"-f", `id=${id}`, "--jq", ".data.node.reviewDecision"],
+				undefined, "/", signal);
+			checkGh(response);
+			return REVIEWS[response.out.trim()];
 		},
 	};
 }
