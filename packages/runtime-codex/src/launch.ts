@@ -10,8 +10,11 @@ import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
 
 /** The variable Neuve's tool server token is in; Codex's shell never passes it on. */
 export const TOKEN_VARIABLE = "NEUVE_CODEX_TOOL_TOKEN";
-/** Neuve's tool server, by the name Codex knows it under. */
 export const NEUVE_SERVER = "neuve";
+export const NEUVE_PLUGINS_SERVER = "neuve_plugins";
+export type ToolServers = Readonly<
+  Partial<Record<typeof NEUVE_SERVER | typeof NEUVE_PLUGINS_SERVER, string>>
+>;
 /** OpenAI's key and address variables, removed so Codex uses its own login, as T3 Code does. */
 export const REMOVED_ENVIRONMENT = [
   "OPENAI_API_KEY",
@@ -92,7 +95,7 @@ const flags = (settings: ReadonlyArray<string>) =>
 export const launchArguments = (
   configuration: Configuration,
   own: OwnSettings,
-  toolServer: string | undefined,
+  toolServers: ToolServers | undefined,
   tokenCommand?: CodexTokenCommand,
   environment?: SessionPolicy["environment"],
   mcpServers?: SessionPolicy["mcpServers"],
@@ -135,14 +138,19 @@ export const launchArguments = (
       : [
           `shell_environment_policy.include_only=${JSON.stringify([...new Set([...includeOnly, ...Object.keys(environment ?? {})])])}`,
         ]),
-    ...(toolServer === undefined
+    ...Object.entries(toolServers ?? {}).flatMap(([name, url]) => [
+      `mcp_servers.${name}.url=${JSON.stringify(url)}`,
+      `mcp_servers.${name}.bearer_token_env_var=${JSON.stringify(TOKEN_VARIABLE)}`,
+      `mcp_servers.${name}.default_tools_approval_mode="approve"`,
+      // A year: a call ends when its handler does, or the turn or the session ends.
+      `mcp_servers.${name}.tool_timeout_sec=31536000`,
+      ...(name === NEUVE_SERVER
+        ? [`mcp_servers.${name}.omit_tools_from=["deferred","code_mode"]`]
+        : []),
+    ]),
+    ...(toolServers === undefined
       ? []
       : [
-          `mcp_servers.${NEUVE_SERVER}.url=${JSON.stringify(toolServer)}`,
-          `mcp_servers.${NEUVE_SERVER}.bearer_token_env_var=${JSON.stringify(TOKEN_VARIABLE)}`,
-          `mcp_servers.${NEUVE_SERVER}.default_tools_approval_mode="approve"`,
-          // A year: a call ends when its handler does, or the turn or the session ends.
-          `mcp_servers.${NEUVE_SERVER}.tool_timeout_sec=31536000`,
           `shell_environment_policy.exclude=${JSON.stringify([...own.exclude, TOKEN_VARIABLE])}`,
         ]),
     "tools.experimental_request_user_input.enabled=false",

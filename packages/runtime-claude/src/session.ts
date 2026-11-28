@@ -260,6 +260,10 @@ export const openClaudeSession = (
         (prefix) => name.startsWith(prefix) && name.length > prefix.length,
       );
     const skillInput = z.object({ skill: z.string() });
+    const searchEnabled =
+      nativeToolPrefixes.length > 0 ||
+      policy.tools.some((tool) => tool.deferred);
+    const searchTool = (name: string) => searchEnabled && name === "ToolSearch";
     const skillTool = (wireName: string) =>
       wireName === "Skill" && skillNames.length > 0;
     // Claude can answer a stale Neuve call itself. Only this policy's tools have Neuve handlers.
@@ -267,7 +271,8 @@ export const openClaudeSession = (
       !neuveTool(name) &&
       !nativeTool(name) &&
       !(name === "StructuredOutput" && final) &&
-      !skillTool(name);
+      !skillTool(name) &&
+      !searchTool(name);
     const context = yield* Effect.context<never>();
     const runPromise = Effect.runPromiseWith(context);
     const queue = yield* Queue.unbounded<RuntimeEvent, Cause.Done>();
@@ -789,6 +794,20 @@ export const openClaudeSession = (
                   updatedInput: input,
                 } satisfies PermissionResult;
               }
+              if (searchTool(wireName)) {
+                if (
+                  turn === undefined ||
+                  turn.ending !== undefined ||
+                  stopped ||
+                  options.signal.aborted
+                )
+                  return deny();
+                turn.admittedCalls.add(options.toolUseID);
+                return {
+                  behavior: "allow",
+                  updatedInput: input,
+                } satisfies PermissionResult;
+              }
               if (skillTool(wireName)) {
                 const target = skillInput.safeParse(input);
                 if (
@@ -1214,7 +1233,10 @@ export const openClaudeSession = (
             config.oauthToken,
           ),
           cwd: policy.mcpServers && policy.folder ? policy.folder : config.cwd,
-          tools: plugin === undefined ? [] : ["Skill"],
+          tools: [
+            ...(plugin === undefined ? [] : ["Skill"]),
+            ...(searchEnabled ? ["ToolSearch"] : []),
+          ],
           settingSources: [],
           // Disable skill and plugin hooks. SDK callbacks still run.
           settings: { disableAllHooks: true },
@@ -1231,6 +1253,7 @@ export const openClaudeSession = (
           systemPrompt: policy.systemPrompt,
           mcpServers: { ...mcpServers, neuve: server },
           allowedTools: [
+            ...(searchEnabled ? ["ToolSearch"] : []),
             ...skillNames.map((name) => `Skill(${name})`),
             ...(policy.approvalPolicy === "allow"
               ? [

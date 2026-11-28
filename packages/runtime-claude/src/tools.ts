@@ -49,7 +49,6 @@ export function toolServer(
   onProtocolFault: () => Promise<void> = async () => {},
   onUnknownTool?: () => Promise<void>,
 ): McpSdkServerConfigWithInstance & {
-  readonly alwaysLoad: true;
   readonly stampToolUseId: HookCallback;
   readonly clearStamps: () => void;
 } {
@@ -84,10 +83,9 @@ export function toolServer(
   const tools = definitions.map((definition) => ({
     ...mcpTool(definition),
     inputSchema: ToolSchema.shape.inputSchema.parse(definition.inputSchema),
-    // sdk.mjs:121 applies server alwaysLoad to each tool; sdk.mjs:147 bw drops it from SDK config.
     _meta: {
       "anthropic/maxResultSizeChars": 500000,
-      "anthropic/alwaysLoad": true,
+      ...(definition.deferred ? {} : { "anthropic/alwaysLoad": true }),
     },
   }));
   instance.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
@@ -133,7 +131,6 @@ export function toolServer(
     name: "neuve",
     instance,
     timeout: TOOL_TIMEOUT_MS,
-    alwaysLoad: true,
     stampToolUseId,
     clearStamps: () => stamps.clear(),
   };

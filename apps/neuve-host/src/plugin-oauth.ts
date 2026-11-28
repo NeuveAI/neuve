@@ -178,7 +178,7 @@ export class PluginOAuth {
 		const provider: OAuthClientProvider = {
 			redirectUrl,
 			clientMetadata: {
-				client_name: "Ace", redirect_uris: [redirectUrl.href], response_types: ["code"],
+				client_name: "Neuve", redirect_uris: [redirectUrl.href], response_types: ["code"],
 				grant_types: ["authorization_code", "refresh_token"], token_endpoint_auth_method: "none",
 			},
 			state: () => state,
@@ -198,7 +198,7 @@ export class PluginOAuth {
 			},
 		};
 
-		const probe = new Client({ name: "ace", version: "1" });
+		const probe = new Client({ name: "neuve", version: "1" });
 		try {
 			diagnostic.step = "probe";
 			await probe.connect(new StreamableHTTPClientTransport(server.url, {

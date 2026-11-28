@@ -165,10 +165,13 @@ test.each(["allow", "ask"] as const)(
               settingSources: [],
               strictMcpConfig: true,
               settings: { disableAllHooks: true },
+              tools: ["ToolSearch"],
               mcpServers: { "chrome-devtools": server },
             });
             expect(options.allowedTools).toEqual(
-              approvalPolicy === "allow" ? ["mcp__chrome-devtools__*"] : [],
+              approvalPolicy === "allow"
+                ? ["ToolSearch", "mcp__chrome-devtools__*"]
+                : ["ToolSearch"],
             );
           },
         }),

@@ -149,14 +149,20 @@ test("a read-only planning session is served the plan writer and told how to sav
 test("the bridge offers carried HTTP tools in write turns and withholds them in plan mode", () => {
   const offered = conversation(["linear_update_issue", "other_read_issue"]);
   const pluginTools = new Set(["linear_update_issue"]);
+  const deferredTools = new Set([...pluginTools, "other_read_issue"]);
   const ace = policy(offered, handle, undefined, {
     ownTools: true,
     pluginTools,
+    deferredTools,
   });
-  expect(ace.tools.map((tool) => tool.name)).toEqual([
-    "question",
-    "linear_update_issue",
+  expect(ace.tools.map(({ name, deferred }) => [name, deferred])).toEqual([
+    ["question", undefined],
+    ["linear_update_issue", true],
   ]);
+  const claude = policy(offered, handle, undefined, { deferredTools });
+  expect(
+    claude.tools.filter((tool) => tool.deferred).map((tool) => tool.name),
+  ).toEqual(["linear_update_issue", "other_read_issue"]);
   const planning = { role: "system" as const, content: "", timestamp: 1 };
   Object.defineProperty(planning, Symbol.for("neuve.chat.plan-request"), {
     value: true,
@@ -164,11 +170,13 @@ test("the bridge offers carried HTTP tools in write turns and withholds them in 
   const plan = policy([...offered, planning], handle, undefined, {
     ownTools: true,
     pluginTools,
+    deferredTools,
   });
   expect(plan.tools.map((tool) => tool.name)).toEqual(["question"]);
   const disabled = policy(conversation([]), handle, undefined, {
     ownTools: true,
     pluginTools,
+    deferredTools,
   });
   expect(disabled.tools.map((tool) => tool.name)).toEqual(["question"]);
 });
