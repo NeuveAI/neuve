@@ -11,17 +11,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { Effect, Layer, Option } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
 import {
   Actors,
+  Ancestry,
   Blobs,
   Cycles,
   Identity,
   JobQueue,
   Log,
-  Proofs,
   ReviewOrigins,
   Sessions,
   Vents,
@@ -59,12 +61,18 @@ const git = (...args: string[]) => {
   if (r.exitCode) throw new Error(r.stderr.toString());
   return r.stdout.toString().trim();
 };
-const mockProcessTable = (rows: string) => {
+const mockProcessTable = (rows: string, owner?: number) => {
   const bin = mkdtempSync(join(tmpdir(), "native-review-process-table-"));
   const path = process.env.PATH;
-  writeFileSync(join(bin, "ps"), `#!/bin/sh\nprintf '%s\\n' '${rows}'\n`, {
-    mode: 0o700,
-  });
+  const child =
+    owner === undefined
+      ? ""
+      : `if [ "$PPID" != ${owner} ]; then printf '%s ${owner} Sat Oct 17 13:31:35 2026 bun\\n' "$PPID"; fi\n`;
+  writeFileSync(
+    join(bin, "ps"),
+    `#!/bin/sh\nprintf '%s\\n' '${rows}'\n${child}`,
+    { mode: 0o700 },
+  );
   process.env.PATH = `${bin}:${path ?? ""}`;
   return () => {
     if (path === undefined) delete process.env.PATH;
@@ -658,16 +666,20 @@ test("a channel worker with no process row opens without a live session", async 
 });
 
 // A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
-test("CLI review, proof and vent record their owning Ace chats", async () => {
+test("CLI review and vent and MCP proof record their owning Ace chats", async () => {
   const previousChat = process.env.NEUVE_ACE_CHAT;
   const location = await execute(resolveStoreLocation(root));
   const channel = "cli-fixture";
   const range = `${base}..${head}`;
   const requestId = mintUlid();
   await execute(withStore(root, "create", Effect.void));
-  const restoreProcessTable = mockProcessTable(
-    `${process.pid} 1 Sat Oct 17 13:30:35 2026 bun`,
-  );
+  const restoreProcessTable =
+    Ancestry.snapshotProcesses() === undefined
+      ? mockProcessTable(
+          `${process.pid} 1 Sat Oct 17 13:30:35 2026 bun`,
+          process.pid,
+        )
+      : undefined;
   try {
     const close = await Sessions.openAceChannelSession(
       root,
@@ -713,28 +725,71 @@ test("CLI review, proof and vent record their owning Ace chats", async () => {
       await expect(
         callbacks.reviewLookup(root, channel, { review: unownedId, chat: 7 }),
       ).rejects.toThrow("does not hold this review request");
-      process.env.NEUVE_ACE_CHAT = "cli-fixture/8";
-      const proof = await execute(
-        withStore(
+      const server = Bun.spawn(
+        [
+          process.execPath,
+          "--no-env-file",
+          join(import.meta.dir, "../src/cli.ts"),
+          "mcp",
+          "--repo",
           root,
-          "write",
-          Proofs.recordAsCaller(location, {
-            repository: root,
-            input: {
+        ],
+        {
+          env: { ...process.env, ...Identity.aceChatEnvironment(channel, 8) },
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "inherit",
+          signal: AbortSignal.timeout(5_000),
+        },
+      );
+      const lines = createInterface({ input: Readable.from(server.stdout) });
+      const replies = lines[Symbol.asyncIterator]();
+      const receive = async () =>
+        JSON.parse((await replies.next()).value ?? "null");
+      const send = (message: object) =>
+        server.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`,
+        );
+      try {
+        send({
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-11-25",
+            capabilities: {},
+            clientInfo: { name: "ace-caller-test", version: "1" },
+          },
+        });
+        expect(await receive()).toMatchObject({
+          id: 1,
+          result: { serverInfo: { name: "neuve" } },
+        });
+        send({ method: "notifications/initialized" });
+        send({
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "record_proof",
+            arguments: {
               kind: "log",
               range,
               text: "fixture output",
               claim: "The fixture ran.",
               requirement: "Keep the chat's proof.",
             },
-            mask: (text) => text,
-          }).pipe(Effect.provide(Blobs.layer(location))),
-        ),
-      );
-      expect(proof).toMatchObject({
-        status: "recorded",
-        caller: { subagentId: "8" },
-      });
+          },
+        });
+        expect(await receive()).toMatchObject({
+          id: 2,
+          result: {
+            content: [{ text: expect.stringContaining("Proof recorded") }],
+          },
+        });
+      } finally {
+        lines.close();
+        server.stdin.end();
+        await server.exited;
+      }
       process.env.NEUVE_ACE_CHAT = "cli-fixture/9";
       const vent = await execute(
         withStore(
@@ -790,7 +845,7 @@ test("CLI review, proof and vent record their owning Ace chats", async () => {
       ),
     ).toBeUndefined();
   } finally {
-    restoreProcessTable();
+    restoreProcessTable?.();
     if (previousChat === undefined) delete process.env.NEUVE_ACE_CHAT;
     else process.env.NEUVE_ACE_CHAT = previousChat;
   }

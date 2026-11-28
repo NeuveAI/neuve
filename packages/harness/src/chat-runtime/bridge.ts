@@ -927,13 +927,18 @@ export class ChatRuntimeBridge {
     }
     const scope = Scope.makeUnsafe();
     const { channel, skills } = this.options;
+    const { folder } = gen;
+    const environment =
+      channel === undefined || gen.chat === undefined
+        ? undefined
+        : Identity.aceChatEnvironment(channel, gen.chat);
     const configured = {
       ...policy(
         offeredMessages(gen),
         (name, call, input) => this.wait(() => live, call, name, input),
         selection,
         {
-          folder: gen.folder,
+          folder,
           skills,
           ownTools: route.capabilities.ownTools,
           pluginTools: gen.pluginTools,
@@ -942,10 +947,26 @@ export class ChatRuntimeBridge {
           attended: gen.attended,
         },
       ),
-      ...(channel === undefined || gen.chat === undefined
-        ? {}
-        : { environment: Identity.aceChatEnvironment(channel, gen.chat) }),
+      ...(environment === undefined ? {} : { environment }),
     };
+    const launch = { ...configured };
+    if (
+      route.capabilities.ownTools &&
+      folder !== undefined &&
+      environment !== undefined
+    ) {
+      const command = Bun.which("neuve");
+      if (command)
+        launch.mcpServers = {
+          ...configured.mcpServers,
+          proof: {
+            type: "stdio",
+            command,
+            args: ["mcp", "--repo", folder],
+            env: environment,
+          },
+        };
+    }
     const live: Live = {
       owner: gen.owner,
       ...(gen.chat === undefined ? {} : { chat: gen.chat }),
@@ -967,7 +988,7 @@ export class ChatRuntimeBridge {
       const acquired = Promise.withResolvers<void>();
       live.acquisition = acquired.promise;
       const acquisition = Effect.runPromise(
-        this.options.registry.openSession(route.name, configured, start).pipe(
+        this.options.registry.openSession(route.name, launch, start).pipe(
           Effect.provideService(Scope.Scope, scope),
           Effect.onExit((exit) =>
             Effect.sync(() => {

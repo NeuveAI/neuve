@@ -3,7 +3,7 @@ name: neuve
 description: >
   Use Neuve, the code-review tool, from an agent session. Load it when the person asks you to set
   Neuve up, request or read a Neuve review, act on a Neuve review's findings or requests for
-  changes, read scope before starting work, record proof for a change, or point them to the review desk; when you are the
+  changes, read scope before starting work, record proof for a change or show and save proof of your work, or point them to the review desk; when you are the
   implementer of work a Neuve review will follow, to read its scope and record its proof; when you are the
   independent reviewer of an implementer's work before a Neuve review, or a final reviewer
   alongside a Neuve review of a finished range; or when the repository's own instructions (AGENTS.md, CLAUDE.md) tell you to use
@@ -19,13 +19,14 @@ Neuve reviews a commit range: it splits the range into batches, each with one fo
 ## When not to load it
 
 - A repository where Neuve isn't set up, unless the person asks you to set it up.
-- General Git or coding work, even in a repository where Neuve is set up, when neither the person nor the repository's instructions ask for a Neuve review.
+- General Git or coding work, even in a repository where Neuve is set up, when neither the person nor the repository's instructions ask for a Neuve review or for proof of the work.
 - Reviewing code that no Neuve review will follow and no Neuve review has covered, unless the person or the repository's instructions ask you to act as Neuve's inner-loop or final reviewer.
 - Neuve's own maintenance commands (`neuve records`, `neuve review recompose`, `neuve hybrid`, `neuve semantic`, `neuve workspace`). They are for the people who build Neuve, not for using it.
 
 ## Rules
 
 - **Read a new design against what it meets.** When a plan, ticket or request brings a new design, then before you plan, build or review it, find in the repository what it touches. That means the recorded decisions that conflict with it, the product principles it interacts or collides with, and the architecture records it interacts or collides with. Name each one. A newer, explicit design overrides an older decision it contradicts, and that older decision gets amended. Where it isn't clear which wins, ask the person. Never work around a conflict to deliver something close to what was asked.
+- **Proof the person asks for is recorded.** When they ask you to show your work or save proof of it, save what they asked for and record each artefact with Neuve too ([references/proof.md](references/proof.md)). A saved file alone doesn't count in a review. In a work lane, commit the work on the lane's branch first: a review counts only proof that observed a commit. That request is the ask to commit; it doesn't extend to other asks.
 - **Ask, don't start.** Request a review only when the person asks, or when the repository's instructions say to: a review runs on the person's model account. Commit only when the person asks you to or their instructions say so; if the work isn't committed, ask.
 - **Only a recorded disposition approves what a person or an agent decides.** A commit, a queued or completed run, a passing check, a test or a ticket's status never does. A static-automation unit has no disposition: its checks give a status, red or green, which is not a person's approval.
 - **Never decide for a person.** On human-required work your review is a suggestion, not a decision. Never record or send a disposition in a person's name. Tell the person what waits on them and where to decide it.

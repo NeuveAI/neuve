@@ -112,7 +112,11 @@ const recordCommand = async (args: ReadonlyArray<string>) => {
       }).pipe(Effect.provide(Blobs.layer(location))),
     ),
   );
-  const message = Proofs.describeRecord(result);
+  const message =
+    Proofs.describeRecord(result) +
+    (result.status === "unlinked" && result.caller._tag === "Unavailable"
+      ? " Use the `record_proof` tool if available."
+      : "");
   if (values.json === true)
     await write(JSON.stringify({ ...result, message }, null, 2));
   else await write(message);

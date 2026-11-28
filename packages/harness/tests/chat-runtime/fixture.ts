@@ -390,6 +390,7 @@ export class Statuses implements AccountStatusSource {
 export async function fixture(
   options: {
     accounts?: Account[];
+    channel?: string;
     storage?: MemoryStorage;
     conversationId?: ConversationId;
     fake?: FakeRuntime;
@@ -453,6 +454,7 @@ export async function fixture(
   const bridge = new ChatRuntimeBridge({
     registry: runtime,
     heads,
+    ...(options.channel === undefined ? {} : { channel: options.channel }),
     ...(options.recovery ? { recovery: options.recovery } : {}),
     ...(options.now ? { now: options.now } : {}),
     log: (event, fields) => fake.logs.push({ event, fields }),
