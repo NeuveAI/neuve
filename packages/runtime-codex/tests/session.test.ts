@@ -985,10 +985,93 @@ describe("the mode table", () => {
     );
   });
 
+  // The app server must get an override only for enabled personal copies of served HTTP plugins.
+  test.each([true, false])(
+    "write turns dedupe only served HTTP endpoints (HTTP plugin served: %s)",
+    async (http) => {
+      const endpoint = "https://mcp.example.com/Tracker";
+      const servers = {
+        "own-server": {
+          url: "HTTPS://MCP.EXAMPLE.COM:443/tracker/",
+          enabled: true,
+        },
+        different: { url: "https://mcp.example.com/other", enabled: true },
+        disabled: { url: endpoint, enabled: false },
+        malformed: { url: "mcp.example.com/Tracker", enabled: true },
+        stdio: { enabled: true },
+      };
+      const fake = codex((message, process) =>
+        message.method === "config/read"
+          ? {
+              config: {
+                ...OWN,
+                mcp_servers: Object.fromEntries(
+                  Object.entries(servers).map(([name, server]) => [
+                    name,
+                    {
+                      ...server,
+                      enabled:
+                        server.enabled &&
+                        !process.args.includes(
+                          `mcp_servers.${name}.enabled=false`,
+                        ),
+                    },
+                  ]),
+                ),
+                features: {
+                  hooks: !process.clean,
+                  apps: !process.clean,
+                  plugins: !process.clean,
+                },
+                web_search: process.clean ? "disabled" : "live",
+              },
+            }
+          : undefined,
+      );
+      const disabledFlags = (process: Process) =>
+        process.args.filter((arg) =>
+          /^mcp_servers\..+\.enabled=false$/.test(arg),
+        );
+      await run(
+        fake,
+        (session, read) =>
+          Effect.gen(function* () {
+            yield* startOn(fake, session, readOnly);
+            expect(disabledFlags(fake.current())).toEqual([
+              "mcp_servers.own-server.enabled=false",
+              "mcp_servers.different.enabled=false",
+              "mcp_servers.disabled.enabled=false",
+              "mcp_servers.malformed.enabled=false",
+              "mcp_servers.stdio.enabled=false",
+            ]);
+            fake.send("turn/completed", completed("completed"));
+            yield* read.next("turn.finished");
+            yield* startOn(fake, session, write);
+            expect(disabledFlags(fake.current())).toEqual(
+              http ? ["mcp_servers.own-server.enabled=false"] : [],
+            );
+            expect(fake.current().args).toContain(
+              'mcp_servers.neuve_plugins.default_tools_approval_mode="approve"',
+            );
+          }),
+        {
+          policy: {
+            ...withTool,
+            tools: withTool.tools.map((tool) => ({
+              ...tool,
+              deferred: true,
+              ...(http ? { endpoint } : {}),
+            })),
+          },
+        },
+      );
+    },
+  );
+
   test("carried stdio servers keep distinct aliases after name normalization", () => {
     const args = launchArguments(
       "own",
-      { mcpServers: [], plugins: [], apps: [], exclude: [], skills: [] },
+      { mcpServers: new Map(), plugins: [], apps: [], exclude: [], skills: [] },
       undefined,
       undefined,
       undefined,
@@ -1076,7 +1159,10 @@ describe("the mode table", () => {
       { policy: scoped },
     );
     const personal = {
-      mcpServers: ["chrome_devtools", "neuve_chrome_devtools"],
+      mcpServers: new Map([
+        ["chrome_devtools", undefined],
+        ["neuve_chrome_devtools", undefined],
+      ]),
       plugins: [],
       apps: [],
       exclude: [],

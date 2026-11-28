@@ -7,6 +7,7 @@ import {
   AccountName,
   RuntimeEvent,
   TurnLimit,
+  type SessionPolicy,
   type ToolDefinition,
 } from "@neuve/runtime";
 import { Effect, Exit, Queue, Scope, Stream } from "effect";
@@ -371,7 +372,7 @@ test('Codex gets "Stopped." when a Neuve tool call is interrupted', async () => 
 
 test("Codex loads only the core endpoint eagerly and keeps the person's write tools enabled", () => {
   const own = {
-    mcpServers: ["personal"],
+    mcpServers: new Map([["personal", undefined]]),
     plugins: ["personal-plugin"],
     apps: [],
     skills: [],
@@ -399,4 +400,50 @@ test("Codex loads only the core endpoint eagerly and keeps the person's write to
   expect(
     clean.some((arg) => arg.startsWith("mcp_servers.neuve_plugins.")),
   ).toBe(false);
+});
+
+// The launch flags must leave protected and unaddressable names on even when endpoints match.
+test("the write launch switches off only addressable personal copies of served HTTP servers", () => {
+  const endpoint = "https://mcp.example.com/Tracker/?view=Full";
+  const matching = "HTTPS://MCP.EXAMPLE.COM:443/tracker?VIEW=full";
+  const own = {
+    mcpServers: new Map([
+      ["matching", matching],
+      ["different-query", "https://mcp.example.com/tracker?view=summary"],
+      ["disabled-or-stdio", undefined],
+      ["broken-url", "mcp.example.com/Tracker"],
+      ["name.with.dot", matching],
+      ['name"with"quotes', matching],
+      ["name with space", matching],
+      ["neuve", matching],
+      ["neuve_plugins", matching],
+    ]),
+    plugins: [],
+    apps: [],
+    skills: [],
+    exclude: [],
+  };
+  const servers = { neuve_plugins: "http://127.0.0.1:1234/plugins/mcp" };
+  const tools = [
+    { ...probe, deferred: true, endpoint },
+  ] satisfies SessionPolicy["tools"];
+  const flagsFor = (
+    served: typeof servers | undefined,
+    offered: SessionPolicy["tools"],
+  ) =>
+    launchArguments(
+      "own",
+      own,
+      served,
+      undefined,
+      undefined,
+      undefined,
+      offered,
+    ).filter((arg) => /^mcp_servers\..+\.enabled=false$/.test(arg));
+
+  expect(flagsFor(servers, tools)).toEqual([
+    "mcp_servers.matching.enabled=false",
+  ]);
+  expect(flagsFor(undefined, tools)).toEqual([]);
+  expect(flagsFor(servers, [{ ...probe, deferred: true }])).toEqual([]);
 });

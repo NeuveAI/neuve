@@ -253,7 +253,7 @@ export const findCodex = <A, E>(
             args: launchArguments(
               "clean",
               {
-                mcpServers: [],
+                mcpServers: new Map(),
                 plugins: [],
                 apps: [],
                 skills: [],

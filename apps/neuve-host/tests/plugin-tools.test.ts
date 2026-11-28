@@ -321,10 +321,17 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 			ownTools: provider => provider === "fixture-codex",
 			planning: async () => ({ kind: "failure", reason: "unavailable", message: "Fixture planning." }),
 		});
+		let deferredTools: unknown;
 		async function ask(mode: "ace" | "plan" = "ace", provider?: "fixture-claude" | "fixture-codex") {
 			const model = provider ? { ...MODEL, provider } : MODEL;
 			const native = provider && fauxProvider({ provider, api: "neuve-runtime", models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
-			if (native) channel.scripted.models.setProvider(native.provider);
+			if (native) channel.scripted.models.setProvider({
+				...native.provider,
+				streamSimple(model, context, options) {
+					deferredTools = options && Reflect.get(options, Symbol.for("neuve.chat.deferred-plugin-tools"));
+					return native.provider.streamSimple(model, context, options);
+				},
+			});
 			const prompt = Promise.withResolvers<{ pi: string; bridge: string; offered: string[]; served: string[] }>();
 			(native || channel.faux).appendResponses([request => {
 				const bridged = policy(request.messages, () => Effect.succeed({ text: "" }), undefined, {
@@ -364,6 +371,8 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 		expect(claude).not.toContain("Use `ToolSearch`");
 		const codex = (await ask("ace", "fixture-codex")).pi;
 		expect(codex).toContain(`${list}\n\nUse Codex's tool discovery to load tools from the \`neuve_plugins\` server on demand.`);
+		// The native request needs the endpoint of the server that answered discovery.
+		expect(deferredTools).toEqual(new Map([["tracker_find_issue", endpoint.url.href]]));
 		const plan = await ask("plan");
 		expect(plan.offered).toContain("planning_issue");
 		expect(plan.pi).toContain("Linear planning tools read scope and dependencies.");

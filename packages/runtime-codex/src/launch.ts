@@ -40,7 +40,8 @@ const chatgptPlan = ([command, ...args]: CodexTokenCommand) => [
 
 /** The person's settings and the skill flags derived from the startup probe. */
 export interface OwnSettings {
-  readonly mcpServers: ReadonlyArray<string>;
+  /** All personal server names, with endpoints only for enabled HTTP servers. */
+  readonly mcpServers: ReadonlyMap<string, string | undefined>;
   readonly plugins: ReadonlyArray<string>;
   readonly apps: ReadonlyArray<string>;
   readonly skills: ReadonlyArray<{
@@ -74,15 +75,29 @@ const PERSONAL_FEATURES = [
   "tool_suggest",
 ];
 
+const cannotAddress = (name: string) => /[."=\s]/.test(name);
+
 /**
  * `-c` splits a key on every dot and takes quotes literally, so a name with a dot or a quote cannot
  * be switched off from the command line (the protocol facts). Such a name is returned, and the
  * clean session is refused rather than started with that setting on.
  */
 export const unaddressable = (own: OwnSettings): string | undefined =>
-  [...own.mcpServers, ...own.plugins, ...own.apps].find((name) =>
-    /[."=\s]/.test(name),
-  );
+  [...own.mcpServers.keys(), ...own.plugins, ...own.apps].find(cannotAddress);
+
+const disableServer = (name: string) => `mcp_servers.${name}.enabled=false`;
+
+function httpEndpoint(endpoint: string | undefined): string | undefined {
+  if (endpoint === undefined) return;
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
+    url.pathname = url.pathname.replace(/\/$/, "");
+    return url.href.toLowerCase();
+  } catch {
+    return;
+  }
+}
 
 const flags = (settings: ReadonlyArray<string>) =>
   settings.flatMap((setting) => ["-c", setting]);
@@ -100,10 +115,11 @@ export const launchArguments = (
   tokenCommand?: CodexTokenCommand,
   environment?: SessionPolicy["environment"],
   mcpServers?: SessionPolicy["mcpServers"],
+  tools: SessionPolicy["tools"] = [],
 ): ReadonlyArray<string> => {
   const variables = Object.entries(environment ?? {});
   const includeOnly = own.includeOnly ?? [];
-  const reserved = new Set(own.mcpServers);
+  const reserved = new Set(own.mcpServers.keys());
   const pluginServers =
     configuration === "own"
       ? Object.entries(mcpServers ?? {}).flatMap(([name, server]) => {
@@ -127,6 +143,28 @@ export const launchArguments = (
           ];
         })
       : [];
+  const duplicateServers: string[] = [];
+  if (configuration === "own" && toolServers?.[NEUVE_PLUGINS_SERVER]) {
+    const endpoints = new Set<string>();
+    for (const tool of tools) {
+      if (!tool.deferred) continue;
+      const endpoint = httpEndpoint(tool.endpoint);
+      if (endpoint !== undefined) endpoints.add(endpoint);
+    }
+    if (endpoints.size > 0) {
+      for (const [name, url] of own.mcpServers) {
+        if (
+          name === NEUVE_SERVER ||
+          name === NEUVE_PLUGINS_SERVER ||
+          cannotAddress(name)
+        )
+          continue;
+        const endpoint = httpEndpoint(url);
+        if (endpoint !== undefined && endpoints.has(endpoint))
+          duplicateServers.push(disableServer(name));
+      }
+    }
+  }
   return flags([
     ...(tokenCommand === undefined ? [] : chatgptPlan(tokenCommand)),
     ...variables.map(
@@ -167,11 +205,11 @@ export const launchArguments = (
             .join(",")}]`,
         ]),
     ...(configuration === "own"
-      ? []
+      ? duplicateServers
       : [
           ...PERSONAL_FEATURES.map((feature) => `features.${feature}=false`),
           'web_search="disabled"',
-          ...own.mcpServers.map((name) => `mcp_servers.${name}.enabled=false`),
+          ...[...own.mcpServers.keys()].map(disableServer),
           ...own.plugins.map((name) => `plugins.${name}.enabled=false`),
           ...own.apps.map((name) => `apps.${name}.enabled=false`),
           "apps._default.enabled=false",
