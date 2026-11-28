@@ -145,8 +145,7 @@ export function Conversation(
 	}, [agents, chat?.build, id]);
 	// The builds this chat planned: their cards' pull requests, and what their agents wait on.
 	const started = useMemo(() => transcript.builds.filter((build) => build.chat === id), [transcript.builds, id]);
-	const branches = useMemo(() => buildBranches(started), [started]);
-	const pulls = usePulls(channel.repo, branches);
+	const pulls = usePulls(buildBranches(started, channel.repo));
 	const builds = useMemo(
 		() => buildCards(started, id, (author) => author === user ? "you" : people[author] || author, pulls),
 		[started, id, user, people, pulls],
@@ -248,13 +247,15 @@ export function Conversation(
 					() => {},
 					(error: Error) => void toast.error("Could not stop the agents", { description: error.message }),
 				),
-			merge: (build: string) => {
-				const branch = started.find((value) => value.id === build)?.branch;
-				const pull = branch && pulls.get(branch);
-				return pull ? mergePlan(channel.id, build, pull) : Promise.reject(new Error("No pull request"));
+			merge: (id: string) => {
+				const build = started.find((value) => value.id === id);
+				const pull = build?.branch && pulls.get(build.branch);
+				return build && pull && channel.repo
+					? mergePlan(channel.id, user, channel.repo, build, pull)
+					: Promise.reject(new Error("No pull request"));
 			},
 		}),
-		[mayAsk, openWork, channel.id, user, started, pulls],
+		[mayAsk, openWork, channel.id, channel.repo, user, started, pulls],
 	);
 	const review = useMemo(
 		() =>

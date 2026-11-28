@@ -243,9 +243,9 @@ export function planDetails(builds: Build[], pulls: ReadonlyMap<string, GithubPu
 	});
 }
 
-/** The branches of every build, whose pull requests the card and the details read. */
-export function buildBranches(builds: Build[]): string[] {
-	return [...new Set(builds.flatMap((build) => build.branch ? [build.branch] : []))];
+/** The repository and branch of every build, whose pull requests the card and the details read. */
+export function buildBranches(builds: Build[], repo: string | undefined): [string, string][] {
+	return repo ? builds.flatMap((build) => build.branch ? [[repo, build.branch] as [string, string]] : []) : [];
 }
 
 /**

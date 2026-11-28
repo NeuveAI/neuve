@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useReducer } from "react";
 
-import type { GithubPull } from "@ace/channel/protocol";
+import type { Build, GithubPull } from "@ace/channel/protocol";
 import { toast } from "@ace/ui";
 
 import { host } from "./host";
 
-/** One branch's pull request: what the host's reader last sent, and the views watching it. */
-type Entry = { value?: GithubPull | null; views: Set<() => void>; stop?: () => void };
+/** One branch's pull request: what the host's reader last sent, the views watching it, and its watch. */
+type Entry = {
+	value?: GithubPull | null;
+	views: Set<() => void>;
+	listener: (update: { pull: GithubPull | null; error?: string }) => void;
+	stop?: () => void;
+};
 
 // Kept after the last view leaves, so switching back to a channel shows its pull request at once.
 const entries = new Map<string, Entry>();
@@ -14,66 +19,87 @@ const entries = new Map<string, Entry>();
 const key = (repo: string, branch: string) => `${repo}\0${branch}`;
 
 /**
- * Watches one branch's pull request for `view`. The app holds one host subscription per branch,
- * opened by its first view and closed by its last; the host reads GitHub once for every app.
+ * Watches one branch's pull request for `view`. The app holds one host watch per branch, opened by
+ * its first view and closed by its last; the host reads GitHub once for every app.
  */
 function watch(repo: string, branch: string, view: () => void): () => void {
-	let found = entries.get(key(repo, branch));
-	if (!found) entries.set(key(repo, branch), found = { views: new Set() });
-	const entry = found;
-	entry.views.add(view);
-	entry.stop ??= host.watchPull(repo, branch, ({ pull, error }) => {
-		// A failed read keeps the last pull request shown rather than saying there is none.
-		if (error && !pull) return;
-		entry.value = pull;
-		for (const each of entry.views) each();
-	});
+	let entry = entries.get(key(repo, branch));
+	if (!entry) {
+		const created: Entry = {
+			views: new Set(),
+			listener: ({ pull, error }) => {
+				// A failed read keeps the last pull request shown rather than saying there is none.
+				if (error && !pull) return;
+				created.value = pull;
+				for (const each of created.views) each();
+			},
+		};
+		entries.set(key(repo, branch), entry = created);
+	}
+	const found = entry;
+	found.views.add(view);
+	found.stop ??= host.watchPull(repo, branch, found.listener);
 	return () => {
-		entry.views.delete(view);
-		if (entry.views.size) return;
-		entry.stop?.();
-		entry.stop = undefined;
+		found.views.delete(view);
+		if (found.views.size) return;
+		found.stop?.();
+		found.stop = undefined;
 	};
 }
 
 /**
- * The newest pull request from each of `branches`, by branch: `null` once read and none exists,
- * absent while unknown. Every view of one branch shares one subscription.
+ * Asks the host to read a watched branch's pull request now. Watching again does it: the new
+ * watch is open before the old one closes, so the host keeps its reader and joins any read under way.
  */
-export function usePulls(repo: string | undefined, branches: readonly string[]): ReadonlyMap<string, GithubPull | null> {
+export function readAgain(repo: string, branch: string) {
+	const entry = entries.get(key(repo, branch));
+	if (!entry?.stop) return;
+	const stop = entry.stop;
+	entry.stop = host.watchPull(repo, branch, entry.listener);
+	stop();
+}
+
+window.addEventListener("focus", () => {
+	for (const name of entries.keys()) readAgain(...(name.split("\0") as [string, string]));
+});
+
+/**
+ * The newest pull request from each watched repository and branch, by branch: `null` once read
+ * and none exists, absent while unknown. Every view of one branch shares one watch.
+ */
+export function usePulls(watched: readonly (readonly [repo: string, branch: string])[]): ReadonlyMap<string, GithubPull | null> {
 	const [version, render] = useReducer((count: number) => count + 1, 0);
-	const list = branches.join("\0");
+	const list = watched.map(([repo, branch]) => key(repo, branch)).join("\n");
 	useEffect(() => {
-		if (!repo || !list) return;
-		const offs = list.split("\0").map((branch) => watch(repo, branch, render));
+		if (!list) return;
+		const offs = list.split("\n").map((name) => watch(...(name.split("\0") as [string, string]), render));
 		return () => offs.forEach((off) => off());
-	}, [repo, list]);
+	}, [list]);
 	return useMemo(() => {
 		const pulls = new Map<string, GithubPull | null>();
-		if (!repo || !list) return pulls;
-		for (const branch of list.split("\0")) {
-			const value = entries.get(key(repo, branch))?.value;
-			if (value !== undefined) pulls.set(branch, value);
+		for (const name of list ? list.split("\n") : []) {
+			const value = entries.get(name)?.value;
+			if (value !== undefined) pulls.set(name.split("\0")[1]!, value);
 		}
 		return pulls;
 		// `version` moves with every update the host sends.
-	}, [repo, list, version]);
+	}, [list, version]);
 }
 
 /** The newest pull request from one branch; see `usePulls`. */
 export function usePull(repo: string | undefined, branch: string | undefined): GithubPull | null | undefined {
-	return usePulls(repo, branch ? [branch] : []).get(branch ?? "");
+	return usePulls(repo && branch ? [[repo, branch]] : []).get(branch ?? "");
 }
 
 /**
- * Merges a plan's pull request through the host, pinned to the head the card shows, so a newer
- * push is refused. The host's refusal shows as a toast, and the promise rejects so Merge is
- * offered again.
+ * Merges a plan's pull request through its channel, pinned to the head the card shows, so a newer
+ * push is refused. A refusal shows as a toast, and the promise rejects so Merge is offered again.
  */
-export function mergePlan(channel: string, build: string, pull: GithubPull): Promise<void> {
-	if (!pull.sha) return Promise.reject(new Error("No head commit"));
-	return host.request({ op: "plan-pull-merge", channel, build, number: pull.number, head: pull.sha }).then(
-		() => {},
+export function mergePlan(channel: string, user: string, repo: string, build: Build, pull: GithubPull): Promise<void> {
+	const { id, branch } = build;
+	if (!pull.sha || !branch) return Promise.reject(new Error("No head commit"));
+	return host.channel(channel, { op: "build-merge", author: user, build: id, number: pull.number, head: pull.sha }).then(
+		() => readAgain(repo, branch),
 		(error: Error) => {
 			toast.error(`Could not merge #${pull.number}`, { description: error.message });
 			throw error;

@@ -41,7 +41,7 @@ import { Review } from "./panels/review";
 import { Terminal } from "./panels/terminal";
 import { WorkLog } from "./panels/work-log";
 import { placement } from "./placement";
-import { usePull, usePulls } from "./pull";
+import { readAgain, usePull, usePulls } from "./pull";
 import { openReview } from "./review-destination";
 import type { Item } from "./transcript";
 
@@ -221,9 +221,12 @@ export function ChannelDetails({ channel, user, chat = 1 }: { channel: Listing; 
 	const { changes, info, items, builds } = details;
 	const busy = !!info?.chats.find((value) => value.id === chat)?.busy;
 	const pull = usePull(channel.repo, changes?.branch);
+	// The host reads again when asked: as the chat's run ends and as its head moves.
+	useEffect(() => {
+		if (channel.repo && changes?.branch) readAgain(channel.repo, changes.branch);
+	}, [channel.repo, changes?.branch, changes?.head, busy]);
 	const list = builds?.list;
-	const branches = useMemo(() => buildBranches(list ?? []), [list]);
-	const planPulls = usePulls(channel.repo, branches);
+	const planPulls = usePulls(buildBranches(list ?? [], channel.repo));
 	const plans = useMemo(() => planDetails(list ?? [], planPulls), [list, planPulls]);
 	const shownLinks = useMemo(() => {
 		const known = new Set([pull?.url, ...[...planPulls.values()].map((value) => value?.url)]);
