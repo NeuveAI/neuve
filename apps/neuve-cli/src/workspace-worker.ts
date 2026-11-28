@@ -219,6 +219,7 @@ export function codingWorkerSetup(
           requester,
           plan,
           checkedScope: true,
+          trustWorkingTree: false,
           emit: async (event) => {
             events.push(event);
           },

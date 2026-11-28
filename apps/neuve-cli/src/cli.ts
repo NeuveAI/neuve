@@ -118,7 +118,7 @@ Commands:
               screenshots, video) and list it with each record's currency. Run neuve proof
               --help for the options.
   mcp [--repo <path>]
-              Serve the vent and record_proof tools over MCP on stdio, for the agent session
+              Serve the vent, record_proof and query tools over MCP on stdio, for the agent session
               that starts it.
   semantic --input <json> --python <absolute-path> --snapshot <absolute-path>
     --worker <absolute-path> --variant BASE|TUNED [--artifact-reference <ref>]

@@ -119,6 +119,8 @@ export type McpStdioServer = {
   readonly command: string;
   readonly args?: string[];
   readonly env?: Record<string, string>;
+  /** The runtime loads the server's tools up front and calls them directly, with no limit on how long a call takes. */
+  readonly direct?: true;
 };
 export interface SessionPolicy {
   readonly systemPrompt: string;

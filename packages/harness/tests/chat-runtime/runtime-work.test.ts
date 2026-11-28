@@ -215,10 +215,11 @@ test("attended and unattended requests reopen the same chat with the correspondi
   }
 });
 
-test("an attended Codex write turn launches Neuve proof with its chat identity", async () => {
+// The subprocess must receive the chat identity to attribute Records calls.
+test("an attended Codex write turn launches Neuve Records with its chat identity", async () => {
   const server = codex();
   const run = await fixture({
-    channel: "proof-fixture",
+    channel: "records-fixture",
     accounts: [
       Account.parse({
         name: "codex",
@@ -252,7 +253,7 @@ test("an attended Codex write turn launches Neuve proof with its chat identity",
   try {
     run.pi.install(
       defineExtension({
-        name: "attended-proof-test",
+        name: "attended-records-test",
         hooks: [
           hook(GenerationTask, {
             beforeRequest({ messages }) {
@@ -279,12 +280,14 @@ test("an attended Codex write turn launches Neuve proof with its chat identity",
     expect(
       server
         .current()
-        .args.filter((arg) => arg.startsWith("mcp_servers.neuve_proof.")),
+        .args.filter((arg) => arg.startsWith("mcp_servers.neuve_records.")),
     ).toEqual([
-      'mcp_servers.neuve_proof.command="/fixture/bin/neuve"',
-      'mcp_servers.neuve_proof.args=["mcp","--repo","/work"]',
-      `mcp_servers.neuve_proof.env={"NEUVE_ACE_CHAT"="proof-fixture/${run.conversation.id}"}`,
-      'mcp_servers.neuve_proof.default_tools_approval_mode="approve"',
+      'mcp_servers.neuve_records.command="/fixture/bin/neuve"',
+      'mcp_servers.neuve_records.args=["mcp","--repo","/work"]',
+      `mcp_servers.neuve_records.env={"NEUVE_ACE_CHAT"="records-fixture/${run.conversation.id}"}`,
+      'mcp_servers.neuve_records.default_tools_approval_mode="approve"',
+      'mcp_servers.neuve_records.omit_tools_from=["deferred","code_mode"]',
+      "mcp_servers.neuve_records.tool_timeout_sec=31536000",
     ]);
     server.send("turn/completed", completed("completed"));
     expect((await submitted).status).toBe("done");

@@ -1029,12 +1029,13 @@ describe("the mode table", () => {
       mcpServers: {
         "chrome-devtools": { ...server, args: [...server.args] },
         plain: {
-          type: "stdio" as const,
+          type: "stdio",
           command: "plain-server",
           args: ["--identify"],
+          direct: true,
         },
       },
-    };
+    } satisfies SessionPolicy;
     await run(
       fake,
       (session, read) =>
@@ -1060,6 +1061,12 @@ describe("the mode table", () => {
           );
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_plain.omit_tools_from=["deferred","code_mode"]',
+          );
+          expect(fake.current().args).toContain(
+            "mcp_servers.neuve_plain.tool_timeout_sec=31536000",
           );
           expect(fake.current().args).not.toContain(
             "mcp_servers.own-server.enabled=false",

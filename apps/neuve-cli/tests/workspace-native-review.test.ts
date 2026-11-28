@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReviewFeedSnapshotSchema } from "@ace/host/review-protocol";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -53,6 +54,15 @@ import type {
   PreparedReview,
   ReviewStatusQuery,
 } from "@ace/host/review-protocol";
+import { graphTestPrerequisite } from "../../../scripts/graph-test-prerequisite";
+
+const graph =
+  process.env.NEUVE_GRAPH_BINARY ??
+  join(import.meta.dir, "../../neuve-graph/entire-graph");
+const graphPrerequisite = graphTestPrerequisite({
+  available: existsSync(graph),
+  message: `The Graph engine is unavailable at ${graph}.`,
+});
 
 const root = mkdtempSync(join(tmpdir(), "native-review-records-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -666,7 +676,8 @@ test("a channel worker with no process row opens without a live session", async 
 });
 
 // A chat's first CLI command can arrive before Records has registered its actor or opened a turn.
-test("CLI review and vent and MCP proof record their owning Ace chats", async () => {
+// Query over stdio checks both the response and the caller that Records resolved in the child.
+test("CLI review and vent and MCP proof and query record their owning Ace chats", async () => {
   const previousChat = process.env.NEUVE_ACE_CHAT;
   const location = await execute(resolveStoreLocation(root));
   const channel = "cli-fixture";
@@ -735,11 +746,15 @@ test("CLI review and vent and MCP proof record their owning Ace chats", async ()
           root,
         ],
         {
-          env: { ...process.env, ...Identity.aceChatEnvironment(channel, 8) },
+          env: {
+            ...process.env,
+            NEUVE_GRAPH_BINARY: graph,
+            ...Identity.aceChatEnvironment(channel, 8),
+          },
           stdin: "pipe",
           stdout: "pipe",
           stderr: "inherit",
-          signal: AbortSignal.timeout(5_000),
+          signal: AbortSignal.timeout(55_000),
         },
       );
       const lines = createInterface({ input: Readable.from(server.stdout) });
@@ -785,6 +800,54 @@ test("CLI review and vent and MCP proof record their owning Ace chats", async ()
             content: [{ text: expect.stringContaining("Proof recorded") }],
           },
         });
+        if (!graphPrerequisite.skip) {
+          graphPrerequisite.require();
+          const branch = "mcp-scope";
+          git("branch", branch, head);
+          send({
+            id: 3,
+            method: "tools/call",
+            params: {
+              name: "query",
+              arguments: {
+                revision: head,
+                question: "What is in work.txt?",
+                scope: ["work.txt"],
+                branch,
+              },
+            },
+          });
+          const reply = await receive();
+          expect(reply.id).toBe(3);
+          expect(reply.result.isError).not.toBe(true);
+          const answer = JSON.parse(reply.result.content[0].text);
+          expect(answer).toMatchObject({
+            query: "What is in work.txt?",
+            source: { revision: head },
+            retrieval: { status: "ok" },
+            scope: [
+              { ref: { path: "work.txt", revision: head }, text: "after" },
+            ],
+          });
+          const actorId = Identity.aceChatIdentity(channel, 8).actorId;
+          const queries = await execute(
+            withStore(
+              root,
+              "read",
+              Log.history({ kind: "query.recorded@1", actorId }),
+            ),
+          );
+          expect(queries.map(({ event }) => event)).toEqual([
+            expect.objectContaining({
+              actor: actorId,
+              attribution: expect.objectContaining({ sessionId: channel }),
+              payload: expect.objectContaining({
+                outcome: "completed",
+                revision: head,
+              }),
+            }),
+          ]);
+        }
       } finally {
         lines.close();
         server.stdin.end();
@@ -849,7 +912,7 @@ test("CLI review and vent and MCP proof record their owning Ace chats", async ()
     if (previousChat === undefined) delete process.env.NEUVE_ACE_CHAT;
     else process.env.NEUVE_ACE_CHAT = previousChat;
   }
-});
+}, 60_000);
 
 test("request-only lookup resolves the chat's latest job/run and the Records watch reports queue and stage progression", async () => {
   const intent = newIntent(41);
