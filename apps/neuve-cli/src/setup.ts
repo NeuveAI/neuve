@@ -17,6 +17,7 @@ import {
   type OfferContext,
 } from "./agent-programs.ts";
 import type { AgentHarness } from "./capture/agent-hooks.ts";
+import { repairCapture } from "./capture/setup-hooks.ts";
 import { ReviewRouteName } from "../../../packages/harness/src/settings.ts";
 import {
   RouteRefused,
@@ -393,6 +394,7 @@ export const runSetup = async (given: readonly string[]): Promise<number> => {
     record: repositoryStepsRecord(layout.directory),
     where: repository,
   });
+  await repairCapture(repository, screen);
   await screen.closing({ next: `neuve review HEAD~1..HEAD${repo}` });
   return 0;
 };
@@ -688,6 +690,15 @@ export const upgradeSetup = async (input: {
       where: set.repository,
     }).catch(stopped(set.repository));
     note(outcome);
+    await repairCapture(repository, screen).catch(async (error: unknown) => {
+      failed += 1;
+      const why = error instanceof Error ? error.message : String(error);
+      await screen.step(
+        "failed",
+        "Capture",
+        `stopped in ${shown(repository)}: ${why}`,
+      );
+    });
   }
   // The list corrects itself: one line for the entries dropped, never one per entry.
   if (gone.size > 0) {
