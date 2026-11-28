@@ -1,6 +1,6 @@
 import { readInstallation } from "./installation.ts";
 import { viewFolder } from "./graph-views.ts";
-import { Cause, Data, Effect, Layer, Option } from "effect";
+import { Cause, Data, Effect, Layer, Logger, Option } from "effect";
 import { isSqlError } from "effect/sql/SqlError";
 import {
   Blobs,
@@ -775,7 +775,7 @@ const recordQuery = async (
           Computations.layer.pipe(Layer.provideMerge(Blobs.layer(location))),
         ),
       );
-    }),
+    }).pipe(Effect.provideService(Logger.LogToStderr, true)),
   );
   for (const failure of scopeWriteFailures)
     writeDiagnostic(diagnostics, failure);
@@ -814,9 +814,13 @@ const inspectQuery = async (
   request: QueryRequest,
   emit: (event: GraphInspectionEvent) => Promise<void>,
   signal: AbortSignal | undefined,
+  trustWorkingTree = true,
 ) => {
   signal?.throwIfAborted();
-  const installation = await readInstallation(request.repository);
+  const installation = await readInstallation(request.repository, {
+    // Host reads must not run an executable chosen by the working tree.
+    allowLegacy: trustWorkingTree,
+  });
   // The engine setup recorded, while it still runs; else the one beside this CLI.
   const recorded =
     installation !== undefined &&
@@ -864,6 +868,7 @@ export const runQueryGraph = async (
     signal?: AbortSignal;
     requester?: Requester;
     checkedScope?: boolean;
+    trustWorkingTree?: boolean;
     plan?: Readonly<{ path: string; sha256: string }>;
   }>,
 ): Promise<QuerySourceContext> => {
@@ -938,6 +943,7 @@ export const runQueryGraph = async (
         else await input.emit(publicEvent);
       },
       input.signal,
+      input.trustWorkingTree,
     );
     if (budget !== undefined) outcome = "completed";
   } catch (error) {

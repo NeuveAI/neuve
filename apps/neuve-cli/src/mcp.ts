@@ -10,13 +10,16 @@ import { z } from "zod";
 import { ProofInput, VENT_TEXT_MAX, VentInput } from "@neuve/records-schema";
 import { Blobs, Proofs, Vents } from "@neuve/records-core";
 import { ProofTools } from "@neuve/harness";
+import { parseQueryInvocation } from "./boundary.ts";
+import type { PublicQueryEvent } from "./domain.ts";
+import { collectPublicQueryResult, runQueryGraph } from "./graph-query.ts";
 import { describeFailure, withStore } from "./records-cli.ts";
 
 export const MCP_HELP = `Usage:
   neuve mcp [--repo <path>]
               Serve Neuve's MCP tools over stdio for the agent session that starts it: a
               harness launches it as a subprocess, and it exits when the harness closes its
-              input. Tools: vent, record_proof. Each call is tied to its agent session through process
+              input. Tools: vent, record_proof, query. Calls are tied to the session through process
               ancestry, or the session ID the harness sets when ancestry cannot be read, in the
               repository at --repo or the server's working directory.`;
 
@@ -73,7 +76,30 @@ const RecordProofTool = Tool.dynamic("record_proof", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
-const NeuveTools = Toolkit.make(VentTool, RecordProofTool);
+const QueryInput = z.strictObject({
+  revision: z.string().describe("A hexadecimal Git object name."),
+  question: z.string(),
+  scope: z.array(z.string()).optional().describe("Local scope file paths."),
+  branch: z
+    .string()
+    .optional()
+    .describe("The local branch for the review cycle."),
+});
+const { $schema: _queryDialect, ...queryParameters } =
+  z.toJSONSchema(QueryInput);
+
+const QueryTool = Tool.dynamic("query", {
+  description:
+    "Read code and scope at a Git revision. The same read as neuve query.",
+  parameters: queryParameters,
+  failure: Schema.Unknown,
+})
+  .annotate(Tool.Title, "Query")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
+
+const NeuveTools = Toolkit.make(VentTool, RecordProofTool, QueryTool);
 
 export interface VentReply {
   readonly status: Vents.CallerVentResult["status"] | "invalid";
@@ -193,6 +219,44 @@ const recordProofHandler = (repository: string) => (input: unknown) =>
     } satisfies ProofReply;
   });
 
+const queryHandler = (repository: string) => (input: unknown) =>
+  Effect.gen(function* () {
+    const parsed = QueryInput.safeParse(input);
+    if (!parsed.success)
+      return { status: "invalid", message: z.prettifyError(parsed.error) };
+    const { revision, question, scope = [], branch } = parsed.data;
+    return yield* Effect.tryPromise({
+      try: async (signal) => {
+        const { request, assumedOptions } = parseQueryInvocation([
+          "--repo",
+          repository,
+          "--revision",
+          revision,
+          "--question",
+          question,
+          ...scope.flatMap((path) => ["--scope", path]),
+          ...(branch === undefined ? [] : ["--branch", branch]),
+        ]);
+        const events: PublicQueryEvent[] = [];
+        await runQueryGraph(request, {
+          trustWorkingTree: false,
+          signal,
+          emit: async (event) => {
+            events.push(event);
+          },
+        });
+        return {
+          ...collectPublicQueryResult(events),
+          ...(assumedOptions === undefined
+            ? {}
+            : { assumed_options: assumedOptions }),
+        };
+      },
+      catch: (error) =>
+        error instanceof Error ? error : new Error(String(error)),
+    });
+  });
+
 /** Logs go to stderr: stdout carries only the protocol. */
 const stderrLogger = Logger.make((options) => {
   writeSync(
@@ -227,6 +291,7 @@ export const serverLayer = (repository: string) =>
         NeuveTools.toLayer({
           vent: ventHandler(repository),
           record_proof: recordProofHandler(repository),
+          query: queryHandler(repository),
         }),
       ),
     ),

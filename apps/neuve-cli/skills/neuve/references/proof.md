@@ -33,7 +33,7 @@ neuve proof record <base>..<head> --kind test-run --claim "<what the output show
 
 ## The MCP tools
 
-`neuve mcp` serves two tools over stdio, `record_proof` and `vent`, for the agent session that starts it. `record_proof` records what `neuve proof record` does. Use it when your session has it and `neuve proof record` can't tie the call to your session, as inside a sandbox. Ace offers it to its Codex chats. Elsewhere the person adds it to their agent as a stdio MCP server whose command is `neuve mcp`. Don't change their agent settings yourself unless they ask.
+`neuve mcp` serves three tools over stdio for the agent session that starts it. They are `record_proof`, `vent` and `query`. `record_proof` records what `neuve proof record` does. Use it when your session has it and `neuve proof record` can't tie the call to your session, as inside a sandbox. Ace offers it to its Codex chats. Elsewhere the person adds it to their agent as a stdio MCP server whose command is `neuve mcp`. Don't change their agent settings yourself unless they ask.
 
 ## Say what is hard
 

@@ -966,7 +966,7 @@ export class ChatRuntimeBridge {
       if (command)
         launch.mcpServers = {
           ...configured.mcpServers,
-          proof: {
+          records: {
             type: "stdio",
             command,
             args: ["mcp", "--repo", folder],

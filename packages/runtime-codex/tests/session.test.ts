@@ -922,6 +922,7 @@ describe("the mode table", () => {
     ]);
   });
 
+  // Codex starts carried tools only in the write process and applies its own timeout per server.
   test("carried stdio servers start with their own arguments in the write process", async () => {
     const fake = codex();
     const server = {
@@ -967,6 +968,9 @@ describe("the mode table", () => {
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
           );
+          expect(fake.current().args).toContain(
+            "mcp_servers.neuve_plain.tool_timeout_sec=31536000",
+          );
           expect(fake.current().args).not.toContain(
             "mcp_servers.own-server.enabled=false",
           );
@@ -1003,6 +1007,7 @@ describe("the mode table", () => {
       'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
       'mcp_servers.neuve_chrome_devtools_2.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
       'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
+      "mcp_servers.neuve_chrome_devtools_2.tool_timeout_sec=31536000",
     ]);
   });
 

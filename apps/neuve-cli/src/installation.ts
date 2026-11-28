@@ -191,12 +191,15 @@ export const readWorkingTreeRecord = async (
  */
 export const readInstallation = async (
   repository: string,
+  { allowLegacy = true } = {},
 ): Promise<Installation | undefined> => {
   const owner = await realpath(repository);
   const store = await storeSetupLayout(owner);
   const current =
     store === undefined ? undefined : await readStoreRecord(store);
-  return current ?? (await readWorkingTreeRecord(owner));
+  return (
+    current ?? (allowLegacy ? await readWorkingTreeRecord(owner) : undefined)
+  );
 };
 
 /**
