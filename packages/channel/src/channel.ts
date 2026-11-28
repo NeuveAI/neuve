@@ -458,7 +458,11 @@ export class Channel {
 		const harness = await Harness.open(options.storage, {
 			models: planModeModels(options.models, provider => approvals.receivesAttendance(provider), plugins && {
 				...plugins,
-				deferredTools: () => new Set(visible.snapshot().tools().flatMap(({ tool }) => deferredPluginTool(tool) ? [tool.name] : [])),
+				deferredTools: () => new Map<string, string | undefined>(visible.snapshot().tools().flatMap(({ tool }) => {
+					if (!deferredPluginTool(tool)) return [];
+					const codexApp = "codexApp" in tool && typeof tool.codexApp === "string" ? tool.codexApp : undefined;
+					return [[tool.name, codexApp]];
+				})),
 			}),
 			registry: visible,
 			settings: { get extensions() { return registry.snapshot().installed().filter(extension => extension.name !== query.name); } },

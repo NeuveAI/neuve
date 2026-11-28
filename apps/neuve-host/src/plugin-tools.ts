@@ -204,7 +204,10 @@ async function connect(
 							log(outcome === "ok" ? "info" : "warn", "plugin.tool.call", { plugin: plugin.name, tool: name, outcome });
 						}
 					},
-				}), { deferred: true }));
+				}), {
+					deferred: true,
+					...(plugin.codexApp === undefined ? {} : { codexApp: plugin.codexApp }),
+				}));
 			}
 			let guidance = client.getInstructions() ?? "";
 			for (const value of credentials.values()) {

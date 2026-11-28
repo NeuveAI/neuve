@@ -73,13 +73,16 @@ test("the native session policy reopens when Chrome DevTools changes and withhol
 // The parser supplies a settings label and limits expansion to the credentials declared in the files.
 test("the manifest resolves the display name and restricts expansion to resolved credentials", () => {
 	const plugin = {
-		manifest: { name: "example", description: "Example plugin" },
+		manifest: { name: "example", description: "Example plugin", codexApp: "example_app" },
 		mcp: { mcpServers: { example: {
 			type: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer ${EXAMPLE_KEY}" },
 		} } },
 	};
 	const parsed = PluginManifest.parse(plugin);
 	expect(parsed.displayName).toBe("example");
+	expect(parsed.codexApp).toBe("example_app");
+	// Codex splits override keys on dots.
+	expect(PluginManifest.safeParse({ ...plugin, manifest: { ...plugin.manifest, codexApp: "example.app" } }).success).toBe(false);
 	expect(PluginManifest.parse({
 		...plugin, manifest: { ...plugin.manifest, interface: { displayName: "Example" } },
 	}).displayName).toBe("Example");
@@ -310,6 +313,7 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 		manifest: {
 			name: "tracker", interface: { displayName: "Fixture Tracker" },
 			description: "Read and update tickets.", apiKey: { tracker: "FIXTURE_TRACKER_KEY" },
+			codexApp: "fixture_tracker",
 		},
 		mcp: { tracker: { type: "http", url: endpoint.url.href } },
 	});
@@ -321,10 +325,17 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 			ownTools: provider => provider === "fixture-codex",
 			planning: async () => ({ kind: "failure", reason: "unavailable", message: "Fixture planning." }),
 		});
+		let deferredTools: unknown;
 		async function ask(mode: "ace" | "plan" = "ace", provider?: "fixture-claude" | "fixture-codex") {
 			const model = provider ? { ...MODEL, provider } : MODEL;
 			const native = provider && fauxProvider({ provider, api: "neuve-runtime", models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
-			if (native) channel.scripted.models.setProvider(native.provider);
+			if (native) channel.scripted.models.setProvider({
+				...native.provider,
+				streamSimple(model, context, options) {
+					deferredTools = options && Reflect.get(options, Symbol.for("neuve.chat.deferred-plugin-tools"));
+					return native.provider.streamSimple(model, context, options);
+				},
+			});
 			const prompt = Promise.withResolvers<{ pi: string; bridge: string; offered: string[]; served: string[] }>();
 			(native || channel.faux).appendResponses([request => {
 				const bridged = policy(request.messages, () => Effect.succeed({ text: "" }), undefined, {
@@ -364,6 +375,8 @@ test("plugin sections give each runtime its discovery guidance", async () => {
 		expect(claude).not.toContain("Use `ToolSearch`");
 		const codex = (await ask("ace", "fixture-codex")).pi;
 		expect(codex).toContain(`${list}\n\nUse Codex's tool discovery to load tools from the \`neuve_plugins\` server on demand.`);
+		// The native request needs the Codex app that the tool's plugin declares.
+		expect(deferredTools).toEqual(new Map([["tracker_find_issue", "fixture_tracker"]]));
 		const plan = await ask("plan");
 		expect(plan.offered).toContain("planning_issue");
 		expect(plan.pi).toContain("Linear planning tools read scope and dependencies.");

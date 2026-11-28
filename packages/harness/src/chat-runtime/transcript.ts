@@ -173,22 +173,26 @@ export function definitions(
     call: ToolCall | undefined,
     input: unknown,
   ) => Effect.Effect<import("@neuve/runtime").ToolOutcome>,
-  deferredTools?: ReadonlySet<string>,
+  deferredTools?: ReadonlyMap<string, string | undefined>,
 ): ToolDefinition[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: JsonSchema.parse(tool.parameters),
-    strict: false,
-    ...(deferredTools?.has(tool.name) ? { deferred: true } : {}),
-    hints: {
-      readOnly: false,
-      destructive: false,
-      idempotent: false,
-      openWorld: false,
-    },
-    handle: (input, call) => handle(tool.name, call, input),
-  }));
+  return tools.map((tool) => {
+    const codexApp = deferredTools?.get(tool.name);
+    return {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: JsonSchema.parse(tool.parameters),
+      strict: false,
+      ...(deferredTools?.has(tool.name) ? { deferred: true } : {}),
+      ...(codexApp === undefined ? {} : { codexApp }),
+      hints: {
+        readOnly: false,
+        destructive: false,
+        idempotent: false,
+        openWorld: false,
+      },
+      handle: (input, call) => handle(tool.name, call, input),
+    };
+  });
 }
 export function policy(
   messages: readonly Message[],
@@ -200,7 +204,7 @@ export function policy(
     ownTools?: boolean;
     pluginTools?: ReadonlySet<string> | undefined;
     mcpServers?: SessionPolicy["mcpServers"];
-    deferredTools?: ReadonlySet<string> | undefined;
+    deferredTools?: ReadonlyMap<string, string | undefined> | undefined;
     approvals?: boolean;
     attended?: boolean;
   } = {},
@@ -272,12 +276,15 @@ export function policyKey(value: SessionPolicy): string {
     skillRoots: value.skillRoots,
     approvalPolicy: value.approvalPolicy,
     mcpServers: value.mcpServers,
-    tools: value.tools.map(({ name, description, inputSchema, deferred }) => ({
-      name,
-      description,
-      inputSchema,
-      deferred,
-    })),
+    tools: value.tools.map(
+      ({ name, description, inputSchema, deferred, codexApp }) => ({
+        name,
+        description,
+        inputSchema,
+        deferred,
+        codexApp,
+      }),
+    ),
   });
 }
 export function mirrorCalls(

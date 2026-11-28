@@ -1044,6 +1044,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           tokenCommand,
           policy.environment,
           mcpServers,
+          policy.tools,
         ),
         env: codexEnvironment(
           environment,

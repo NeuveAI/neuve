@@ -100,6 +100,7 @@ export const launchArguments = (
   tokenCommand?: CodexTokenCommand,
   environment?: SessionPolicy["environment"],
   mcpServers?: SessionPolicy["mcpServers"],
+  tools: SessionPolicy["tools"] = [],
 ): ReadonlyArray<string> => {
   const variables = Object.entries(environment ?? {});
   const includeOnly = own.includeOnly ?? [];
@@ -127,6 +128,12 @@ export const launchArguments = (
           ];
         })
       : [];
+  const codexApps = new Set<string>();
+  if (configuration === "own" && toolServers?.[NEUVE_PLUGINS_SERVER]) {
+    for (const { deferred, codexApp } of tools) {
+      if (deferred && codexApp !== undefined) codexApps.add(codexApp);
+    }
+  }
   return flags([
     ...(tokenCommand === undefined ? [] : chatgptPlan(tokenCommand)),
     ...variables.map(
@@ -167,7 +174,7 @@ export const launchArguments = (
             .join(",")}]`,
         ]),
     ...(configuration === "own"
-      ? []
+      ? [...codexApps].map((id) => `apps.${id}.enabled=false`)
       : [
           ...PERSONAL_FEATURES.map((feature) => `features.${feature}=false`),
           'web_search="disabled"',

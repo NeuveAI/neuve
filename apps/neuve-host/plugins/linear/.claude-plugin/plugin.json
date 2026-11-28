@@ -1,6 +1,7 @@
 {
   "name": "linear",
   "description": "Read and update Linear issues, projects, and teams.",
+  "codexApp": "asdk_app_69a089a326dc8191b32a3f2553f5be2c",
   "apiKey": { "linear": "LINEAR_API_KEY" },
   "interface": {
     "displayName": "Linear"

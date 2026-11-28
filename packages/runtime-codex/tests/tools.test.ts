@@ -7,6 +7,7 @@ import {
   AccountName,
   RuntimeEvent,
   TurnLimit,
+  type SessionPolicy,
   type ToolDefinition,
 } from "@neuve/runtime";
 import { Effect, Exit, Queue, Scope, Stream } from "effect";
@@ -155,7 +156,12 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
               name: "fails",
               handle: () => Effect.die("fixture failure"),
             },
-            { ...probe, name: "lookup", deferred: true },
+            {
+              ...probe,
+              name: "lookup",
+              deferred: true,
+              codexApp: "tracker_app",
+            },
           ],
           approvalPolicy: "allow",
           turnLimit: TurnLimit.parse(8),
@@ -187,6 +193,8 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
       expect(args).toContain(
         'mcp_servers.neuve.default_tools_approval_mode="approve"',
       );
+      // The clean launch before any write turn leaves Codex's apps to its own switch-off.
+      expect(args).not.toContain("apps.tracker_app.enabled=false");
 
       const outside = yield* Effect.promise(() =>
         rpc(url, token, call(1)).then((r) => r.json()),
@@ -198,6 +206,8 @@ test("a call is Neuve's own tool on the contract, keeps its checks, and is refus
         message: "go",
         workspace: { folder: "/work", access: "write" },
       });
+      // The write turn's launch switches off the Codex app that Ace's plugin stands for.
+      expect(fake.current().args).toContain("apps.tracker_app.enabled=false");
       const ran = yield* Effect.promise(() =>
         rpc(plugin, token, {
           ...call(1),
@@ -399,4 +409,66 @@ test("Codex loads only the core endpoint eagerly and keeps the person's write to
   expect(
     clean.some((arg) => arg.startsWith("mcp_servers.neuve_plugins.")),
   ).toBe(false);
+});
+
+// Every served Codex app is switched off once, and other personal features keep their mode's defaults.
+test("only a write launch serving deferred plugin tools switches off the Codex apps they stand for", () => {
+  const own = {
+    mcpServers: ["personal"],
+    plugins: ["personal-plugin"],
+    apps: ["tracker_app", "other_app", "personal_app"],
+    skills: [],
+    exclude: [],
+  };
+  const core = { neuve: "http://127.0.0.1:1234/mcp" };
+  const served = {
+    ...core,
+    neuve_plugins: "http://127.0.0.1:1234/plugins/mcp",
+  };
+  const tools = [
+    {
+      ...probe,
+      name: "lookup",
+      deferred: true,
+      codexApp: "tracker_app",
+    },
+    {
+      ...probe,
+      name: "update",
+      deferred: true,
+      codexApp: "tracker_app",
+    },
+    { ...probe, name: "search", deferred: true, codexApp: "other_app" },
+    { ...probe, codexApp: "personal_app" },
+  ] satisfies SessionPolicy["tools"];
+  const write = (servers: typeof core, offered: SessionPolicy["tools"]) =>
+    launchArguments(
+      "own",
+      own,
+      servers,
+      undefined,
+      undefined,
+      undefined,
+      offered,
+    );
+  const withoutCodexApps = [
+    { ...probe, deferred: true },
+  ] satisfies SessionPolicy["tools"];
+
+  expect(write(served, tools).filter((arg) => arg.startsWith("apps."))).toEqual(
+    ["apps.tracker_app.enabled=false", "apps.other_app.enabled=false"],
+  );
+  expect(write(core, tools)).toEqual(write(core, []));
+  expect(write(served, withoutCodexApps)).toEqual(write(served, []));
+  expect(
+    launchArguments(
+      "clean",
+      own,
+      served,
+      undefined,
+      undefined,
+      undefined,
+      tools,
+    ),
+  ).toEqual(launchArguments("clean", own, served));
 });

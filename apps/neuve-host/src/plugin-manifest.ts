@@ -27,6 +27,7 @@ export const loopback = (url: URL) => ["127.0.0.1", "localhost", "[::1]"].includ
 export const PluginManifest = z.strictObject({
 	manifest: z.strictObject({
 		name,
+		codexApp: name.optional(),
 		description: z.string().min(1),
 		version: z.string().optional(),
 		author: z.object({ name: z.string().min(1), email: z.string().optional(), url: z.string().optional() }).optional(),
@@ -64,6 +65,7 @@ export const PluginManifest = z.strictObject({
 	}
 	return {
 		name: manifest.name,
+		...(manifest.codexApp === undefined ? {} : { codexApp: manifest.codexApp }),
 		description: manifest.description,
 		displayName: manifest.interface?.displayName ?? manifest.name,
 		defaultEnabled: manifest.defaultEnabled,

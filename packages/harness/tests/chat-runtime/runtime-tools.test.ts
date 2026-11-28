@@ -8,6 +8,7 @@ import {
   policy,
   RUNTIME_WORK_TOOL,
 } from "../../src/chat-runtime/transcript.ts";
+import { fixture } from "./fixture.ts";
 
 const tool = (name: string) => ({
   name,
@@ -149,7 +150,10 @@ test("a read-only planning session is served the plan writer and told how to sav
 test("the bridge offers carried HTTP tools in write turns and withholds them in plan mode", () => {
   const offered = conversation(["linear_update_issue", "other_read_issue"]);
   const pluginTools = new Set(["linear_update_issue"]);
-  const deferredTools = new Set([...pluginTools, "other_read_issue"]);
+  const deferredTools = new Map([
+    ["linear_update_issue", "tracker_app"],
+    ["other_read_issue", undefined],
+  ]);
   const ace = policy(offered, handle, undefined, {
     ownTools: true,
     pluginTools,
@@ -179,4 +183,30 @@ test("the bridge offers carried HTTP tools in write turns and withholds them in 
     deferredTools,
   });
   expect(disabled.tools.map((tool) => tool.name)).toEqual(["question"]);
+});
+
+// The native runtime needs the current Codex app, even when the offered tool name stays the same.
+test("a deferred plugin's Codex app reaches the native runtime's tool definition", async () => {
+  let codexApp = "tracker_app";
+  const run = await fixture({
+    plugins: {
+      httpTools: () => new Set(["probe"]),
+      deferredTools: () => new Map([["probe", codexApp]]),
+    },
+  });
+  try {
+    run.fake.frames.push({ text: "Done" });
+    expect((await run.submit("Check the plugin tools")).status).toBe("done");
+    expect(run.fake.opened[0]?.policy.tools).toContainEqual(
+      expect.objectContaining({ name: "probe", deferred: true, codexApp }),
+    );
+    codexApp = "new_tracker_app";
+    run.fake.frames.push({ text: "Done" });
+    expect((await run.submit("Check the plugin again")).status).toBe("done");
+    expect(run.fake.opened[1]?.policy.tools).toContainEqual(
+      expect.objectContaining({ name: "probe", deferred: true, codexApp }),
+    );
+  } finally {
+    await run.close();
+  }
 });

@@ -126,7 +126,7 @@ const requestMode = "neuve.chat.request-mode";
 
 export type PluginOffers = {
 	httpTools(): ReadonlySet<string>;
-	deferredTools?(): ReadonlySet<string>;
+	deferredTools?(): ReadonlyMap<string, string | undefined>;
 	nativeServers?(folder?: string): SessionPolicy["mcpServers"];
 	nativeTool?(name: string): boolean;
 };

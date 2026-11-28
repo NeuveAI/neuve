@@ -102,7 +102,7 @@ type Generation = {
   toolOffer?: SystemMessage;
   pluginTools?: ReadonlySet<string>;
   mcpServers?: SessionPolicy["mcpServers"];
-  deferredTools?: ReadonlySet<string>;
+  deferredTools?: ReadonlyMap<string, string | undefined>;
   cleanup: (() => void)[];
   head?: {
     owner: string;
@@ -368,7 +368,7 @@ export class ChatRuntimeBridge {
       ...(toolOffer === undefined ? {} : { toolOffer }),
       ...(pluginTools instanceof Set ? { pluginTools } : {}),
       ...(mcpServers === undefined ? {} : { mcpServers }),
-      ...(deferredTools instanceof Set ? { deferredTools } : {}),
+      ...(deferredTools instanceof Map ? { deferredTools } : {}),
       cleanup: [],
       message: {
         role: "assistant",
