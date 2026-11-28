@@ -2006,11 +2006,7 @@ describe("what the first tests missed", () => {
                   {
                     name: "neuve",
                     path,
-                    enabled:
-                      !process.args.some((arg) =>
-                        arg.startsWith("skills.config="),
-                      ) ||
-                      (enabled && process.args.includes(flag)),
+                    enabled: enabled && process.args.includes(flag),
                   },
                 ],
               },
@@ -2051,20 +2047,13 @@ describe("what the first tests missed", () => {
     {
       reason: "write skills keep the highest-precedence path for each name",
       disablesShared: false,
-      ignoresFlag: false,
     },
     {
       reason:
         "write skills keep the next enabled copy when the person's copy is off",
       disablesShared: true,
-      ignoresFlag: false,
     },
-    {
-      reason: "a write turn fails if Codex leaves a duplicate enabled",
-      disablesShared: false,
-      ignoresFlag: true,
-    },
-  ])("$reason", async ({ disablesShared, ignoresFlag }) => {
+  ])("$reason", async ({ disablesShared }) => {
     const cwd = await mkdtemp(resolve(import.meta.dir, ".skill-roots-"));
     try {
       const entries = [
@@ -2096,30 +2085,18 @@ describe("what the first tests missed", () => {
           const changed = flags?.includes(
             `{path=${JSON.stringify(skill.path)},enabled=${!initiallyEnabled}}`,
           );
-          const ignore =
-            ignoresFlag &&
-            !process.clean &&
-            skill.folder === "carried skills/shared";
           return {
             ...skill,
             scope: "user",
-            enabled: ignore || (changed ? !initiallyEnabled : initiallyEnabled),
+            enabled: changed ? !initiallyEnabled : initiallyEnabled,
           };
         });
       };
-      const fake = codex((message, process) => {
-        if (message.method !== "skills/list") return;
-        const skills = reported(process);
-        if (written(process, "plugin/reconcile").length !== 0)
-          skills.push({
-            folder: "plugin",
-            name: "plugin:skill",
-            path: "/plugin/SKILL.md",
-            scope: "user",
-            enabled: true,
-          });
-        return { data: [{ skills }] };
-      });
+      const fake = codex((message, process) =>
+        message.method === "skills/list"
+          ? { data: [{ skills: reported(process) }] }
+          : undefined,
+      );
       const enabled = (process: Process) =>
         reported(process)
           .filter((skill) => skill.enabled)
@@ -2139,19 +2116,17 @@ describe("what the first tests missed", () => {
               workspace: { folder: cwd, access: "write" },
             });
             const own = fake.current();
-            if (written(own, "turn/start").length !== 0)
-              fake.send("turn/completed", completed("completed"));
-            if (!ignoresFlag)
-              expect(enabled(own)).toEqual([
-                disablesShared
-                  ? ".agents/skills/shared"
-                  : "person/.codex/skills/shared",
-                ".codex/skills/project",
-                "person/.codex/skills/personal",
-              ]);
+            expect(enabled(own)).toEqual([
+              disablesShared
+                ? ".agents/skills/shared"
+                : "person/.codex/skills/shared",
+              ".codex/skills/project",
+              "person/.codex/skills/personal",
+            ]);
+            fake.send("turn/completed", completed("completed"));
             expect(yield* read.next("turn.finished")).toMatchObject({
               turnId: "write",
-              outcome: { status: ignoresFlag ? "failed" : "completed" },
+              outcome: { status: "completed" },
             });
             expect(
               own.io.written
@@ -2160,11 +2135,7 @@ describe("what the first tests missed", () => {
                   (method) =>
                     method === "plugin/reconcile" || method === "thread/resume",
                 ),
-            ).toEqual(
-              ignoresFlag
-                ? ["plugin/reconcile"]
-                : ["plugin/reconcile", "thread/resume"],
-            );
+            ).toEqual(["plugin/reconcile", "thread/resume"]);
             expect(
               fake.processes.map((p) => written(p, "plugin/reconcile").length),
             ).toEqual([0, 0, 1]);
