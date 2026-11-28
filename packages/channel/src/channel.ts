@@ -460,8 +460,8 @@ export class Channel {
 				...plugins,
 				deferredTools: () => new Map<string, string | undefined>(visible.snapshot().tools().flatMap(({ tool }) => {
 					if (!deferredPluginTool(tool)) return [];
-					const codexPlugin = "codexPlugin" in tool && typeof tool.codexPlugin === "string" ? tool.codexPlugin : undefined;
-					return [[tool.name, codexPlugin]];
+					const codexApp = "codexApp" in tool && typeof tool.codexApp === "string" ? tool.codexApp : undefined;
+					return [[tool.name, codexApp]];
 				})),
 			}),
 			registry: visible,

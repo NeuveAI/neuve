@@ -61,7 +61,7 @@ const PERSONAL_FEATURES = [
   "hooks",
   "apps",
   "plugins",
-  "remote_plugin",
+  "remote_app",
   "plugin_sharing",
   "memories",
   "browser_use",
@@ -128,10 +128,10 @@ export const launchArguments = (
           ];
         })
       : [];
-  const codexPlugins = new Set<string>();
+  const codexApps = new Set<string>();
   if (configuration === "own" && toolServers?.[NEUVE_PLUGINS_SERVER]) {
-    for (const { deferred, codexPlugin } of tools) {
-      if (deferred && codexPlugin !== undefined) codexPlugins.add(codexPlugin);
+    for (const { deferred, codexApp } of tools) {
+      if (deferred && codexApp !== undefined) codexApps.add(codexApp);
     }
   }
   return flags([
@@ -174,7 +174,7 @@ export const launchArguments = (
             .join(",")}]`,
         ]),
     ...(configuration === "own"
-      ? [...codexPlugins].map((id) => `apps.${id}.enabled=false`)
+      ? [...codexApps].map((id) => `apps.${id}.enabled=false`)
       : [
           ...PERSONAL_FEATURES.map((feature) => `features.${feature}=false`),
           'web_search="disabled"',

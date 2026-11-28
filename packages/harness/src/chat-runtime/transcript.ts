@@ -176,14 +176,14 @@ export function definitions(
   deferredTools?: ReadonlyMap<string, string | undefined>,
 ): ToolDefinition[] {
   return tools.map((tool) => {
-    const codexPlugin = deferredTools?.get(tool.name);
+    const codexApp = deferredTools?.get(tool.name);
     return {
       name: tool.name,
       description: tool.description,
       inputSchema: JsonSchema.parse(tool.parameters),
       strict: false,
       ...(deferredTools?.has(tool.name) ? { deferred: true } : {}),
-      ...(codexPlugin === undefined ? {} : { codexPlugin }),
+      ...(codexApp === undefined ? {} : { codexApp }),
       hints: {
         readOnly: false,
         destructive: false,
@@ -277,12 +277,12 @@ export function policyKey(value: SessionPolicy): string {
     approvalPolicy: value.approvalPolicy,
     mcpServers: value.mcpServers,
     tools: value.tools.map(
-      ({ name, description, inputSchema, deferred, codexPlugin }) => ({
+      ({ name, description, inputSchema, deferred, codexApp }) => ({
         name,
         description,
         inputSchema,
         deferred,
-        codexPlugin,
+        codexApp,
       }),
     ),
   });

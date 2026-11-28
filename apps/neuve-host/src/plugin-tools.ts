@@ -206,7 +206,7 @@ async function connect(
 					},
 				}), {
 					deferred: true,
-					...(plugin.codexPlugin === undefined ? {} : { codexPlugin: plugin.codexPlugin }),
+					...(plugin.codexApp === undefined ? {} : { codexApp: plugin.codexApp }),
 				}));
 			}
 			let guidance = client.getInstructions() ?? "";

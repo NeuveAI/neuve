@@ -151,7 +151,7 @@ test("the bridge offers carried HTTP tools in write turns and withholds them in 
   const offered = conversation(["linear_update_issue", "other_read_issue"]);
   const pluginTools = new Set(["linear_update_issue"]);
   const deferredTools = new Map([
-    ["linear_update_issue", "tracker_plugin"],
+    ["linear_update_issue", "tracker_app"],
     ["other_read_issue", undefined],
   ]);
   const ace = policy(offered, handle, undefined, {
@@ -185,26 +185,26 @@ test("the bridge offers carried HTTP tools in write turns and withholds them in 
   expect(disabled.tools.map((tool) => tool.name)).toEqual(["question"]);
 });
 
-// The native runtime needs the current Codex plugin, even when the offered tool name stays the same.
-test("a deferred plugin's Codex plugin reaches the native runtime's tool definition", async () => {
-  let codexPlugin = "tracker_plugin";
+// The native runtime needs the current Codex app, even when the offered tool name stays the same.
+test("a deferred plugin's Codex app reaches the native runtime's tool definition", async () => {
+  let codexApp = "tracker_app";
   const run = await fixture({
     plugins: {
       httpTools: () => new Set(["probe"]),
-      deferredTools: () => new Map([["probe", codexPlugin]]),
+      deferredTools: () => new Map([["probe", codexApp]]),
     },
   });
   try {
     run.fake.frames.push({ text: "Done" });
     expect((await run.submit("Check the plugin tools")).status).toBe("done");
     expect(run.fake.opened[0]?.policy.tools).toContainEqual(
-      expect.objectContaining({ name: "probe", deferred: true, codexPlugin }),
+      expect.objectContaining({ name: "probe", deferred: true, codexApp }),
     );
-    codexPlugin = "new_tracker_plugin";
+    codexApp = "new_tracker_app";
     run.fake.frames.push({ text: "Done" });
     expect((await run.submit("Check the plugin again")).status).toBe("done");
     expect(run.fake.opened[1]?.policy.tools).toContainEqual(
-      expect.objectContaining({ name: "probe", deferred: true, codexPlugin }),
+      expect.objectContaining({ name: "probe", deferred: true, codexApp }),
     );
   } finally {
     await run.close();
