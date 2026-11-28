@@ -154,7 +154,9 @@ for await (const line of createInterface({ input: process.stdin })) {
 	const { id, method, params, result } = JSON.parse(line);
 	if (method === "initialize") {
 		roots = params.capabilities.roots ? null : [];
-		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" },
+			instructions: "Use Chrome DevTools for browser work.",
+		} });
 	} else if (method === "notifications/initialized") {
 		if (roots === null) send({ id: "roots", method: "roots/list" });
 	} else if (id === "roots") {
@@ -262,6 +264,29 @@ test("pi drops an oversized plugin image and keeps the text with a filePath hint
 			text: screenshotText(channel.lane.path)
 				+ "\nAn image was too large to include. Save it to a file with filePath.",
 		}]);
+	} finally {
+		await channel.dispose();
+	}
+});
+
+// Codex announces its native server tools itself, while Ace still supplies the plugin's guidance.
+test("the Codex Chrome DevTools section keeps guidance without a tool list", async () => {
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => ({}));
+	const model = { ...MODEL, provider: "fixture-codex" };
+	const codex = fauxProvider({ provider: model.provider, api: "neuve-runtime", models: [{ id: model.modelId }], tokensPerSecond: 100_000 });
+	const channel = await Fixture.create({ plugins, ownTools: provider => provider === model.provider });
+	try {
+		channel.scripted.models.setProvider(codex.provider);
+		let prompt = "";
+		codex.appendResponses([request => {
+			prompt = getCurrentSystemPrompt(request.messages);
+			return fauxAssistantMessage("Done");
+		}]);
+		const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode: "ace", model });
+		expect(await channel.request({ op: "wait", submission })).toBe("done");
+		expect(prompt).toContain("## Plugin: chrome-devtools\nFixture\n\n### MCP Server Instructions\n\n#### chrome-devtools\n\n> Use Chrome DevTools for browser work.");
+		expect(prompt).not.toContain("### Tools");
+		expect(prompt).not.toContain("Use Codex's tool discovery");
 	} finally {
 		await channel.dispose();
 	}

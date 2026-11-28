@@ -423,18 +423,16 @@ export class Channel {
 							const http = search === "codex" ? plugins?.httpTools() : undefined;
 							const candidates = input.agent.tools.filter(tool => names.has(tool.name) &&
 								(!http || http.has(tool.name) || plugins?.nativeTool?.(tool.name)));
-							const hasNative = candidates.some(tool => plugins?.nativeTool?.(tool.name)) &&
-								!await approvals.attended(input.read, input.conversationId, context);
-							const tools = hasNative
-								? candidates
-								: candidates.filter(tool => !plugins?.nativeTool?.(tool.name));
+							const tools = candidates.some(tool => plugins?.nativeTool?.(tool.name)) &&
+								await approvals.attended(input.read, input.conversationId, context)
+								? candidates.filter(tool => !plugins?.nativeTool?.(tool.name))
+								: candidates;
 							if (!tools.length) return;
-							const text = await section.render({ ...input, agent: { ...input.agent, tools: search === "claude" ? [] : tools } }, context);
-							if (text === undefined || search === "claude") return text;
+							const listed = search === "claude" ? [] : http ? tools.filter(tool => http.has(tool.name)) : tools;
+							const text = await section.render({ ...input, agent: { ...input.agent, tools: listed } }, context);
+							if (text === undefined || !listed.length) return text;
 							return `${text}\n\n${search === "codex"
-								? hasNative
-									? "Use Codex's tool discovery to load these tools on demand."
-									: "Use Codex's tool discovery to load tools from the `neuve_plugins` server on demand."
+								? "Use Codex's tool discovery to load tools from the `neuve_plugins` server on demand."
 								: `Use \`${PLUGIN_SEARCH}\` to load these tools before calling them.`}`;
 						},
 					})),
