@@ -100,6 +100,19 @@ test("review, compute and archive never run a nested repository's settings", asy
 	expect(archived).toBe(true);
 });
 
+test("a cloud move reports an unpushed external work lane", async () => {
+	const { record, root, project } = await local();
+	const origin = join(root, "origin.git");
+	git(project, "clone", "--bare", project, origin);
+	git(project, "remote", "add", "origin", origin);
+	const name = "release-fix", branch = `${record.prefix}/${name}`;
+	const path = join(catalog.paths(record.id).lanes, name);
+	git(project, "worktree", "add", "-b", branch, path, "HEAD");
+	git(path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "lane work");
+
+	expect(await unready(record)).toEqual([{ name, path, branch, problem: "not pushed" }]);
+});
+
 for (const reason of ["dirty", "locked", "changed registration"] as const) test(`archive honestly retains ${reason} lanes with a warning`, async () => {
 	const { record, home } = await local();
 	const lane = owned(record);

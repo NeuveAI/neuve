@@ -40,6 +40,27 @@ async function ask(fixture: Fixture, mode?: "plan" | "ace") {
 const shell = (command: string, id = "first-shell") => fauxAssistantMessage(fauxToolCall("bash", { command }, { id }), { stopReason: "toolUse" });
 const cwd = (run: Awaited<ReturnType<typeof setup>>) => run.harness.snapshot(AgentDoc, ROOT_CONVERSATION_ID, context).then(agent => agent?.cwd);
 
+test("external work lanes record the selected release base for lane push", async () => {
+	const fixture = await Fixture.create();
+	fixtures.push(fixture);
+	const { project, lanes, root } = fixture;
+	git(project, "branch", "release");
+	git(project, "commit", "--allow-empty", "-m", "main only");
+	const origin = join(root, "origin.git");
+	git(project, "clone", "--bare", project, origin);
+	git(project, "remote", "add", "origin", origin);
+
+	fixture.script(fauxAssistantMessage(fauxToolCall("lane", { action: "start", name: "fix-release", base: "release" }), { stopReason: "toolUse" }), fauxAssistantMessage("Started"));
+	await ask(fixture);
+	expect(git(join(lanes, "fix-release"), "rev-parse", "HEAD")).toBe(git(project, "rev-parse", "release"));
+	const fork = await buildWorktree({ name: "one", project, lanes, env: cwd => scratchEnv(cwd, root) }, "review-release", context, {
+		branch: "one/fix-release", base: "refs/heads/release",
+	});
+	const bases = ["one/fix-release", fork.branch].map(branch =>
+		Bun.spawnSync(["git", "-C", project, "config", "--local", "--get", `lane.${branch}.base`]).stdout.toString().trim());
+	expect(bases).toEqual(["refs/heads/release", "refs/heads/release"]);
+});
+
 test("ordinary first write admission persists a registered external lane before shell and file tools run; reopen reuses it", async () => {
 	const run = await setup(), { fixture } = run;
 	const before = { head: git(fixture.project, "rev-parse", "HEAD"), index: await readFile(join(fixture.project, ".git/index")), status: git(fixture.project, "status", "--porcelain") };
