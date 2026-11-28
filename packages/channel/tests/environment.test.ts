@@ -95,7 +95,7 @@ test("main chat reports host facts on its lane and on the project checkout witho
 		expect(prompt).toContain("Role: main chat");
 		expect(prompt).toContain("Model: coder. Effort: off. Context used: unknown. Context limit: 200,000 tokens.");
 		expect(prompt).toContain("Git branch: one/work");
-		expect(prompt).toContain("Work lane: work");
+		expect(prompt).toContain("Work lane: work. Load the Neuve skill.");
 		expect(prompt).toContain("Runtime shell: available (Ace's bash tool)");
 		return fauxAssistantMessage("observed");
 	});
@@ -117,6 +117,7 @@ test("main chat reports host facts on its lane and on the project checkout witho
 		const prompt = getCurrentSystemPrompt(request.messages);
 		expect(prompt).toContain("Role: main chat");
 		expect(prompt).toContain(`Working folder: ${fixture!.project}. Git branch: main.`);
+		expect(prompt).not.toContain("Load the Neuve skill.");
 		expect(prompt).toContain("Runtime shell: unavailable");
 		expect(prompt).toContain("version captured-version (source run), commit captured-build");
 		expect(prompt).toContain("Installed neuve and its version: /host/bin/neuve (neuve 0.3.10)");

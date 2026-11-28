@@ -13,7 +13,7 @@ On the review, each requirement shows as a checkpoint with a proof state: Missin
 
 ## As the implementer, record it before you hand over
 
-Record each applicable kind you observe with `neuve proof record`. If the runtime cannot capture a kind, keep every kind it can capture and carry on. Record the missing kind and why in your handover. Never ask for desktop access, an app, a sign-in or a credential to capture proof.
+Record each applicable kind you observe with `neuve proof record`, after committing the work it observed: a record taken before the commit is stale for the unit it covers. When the person asks for proof in a work lane, commit on the lane's branch first, then record. If the runtime cannot capture a kind, keep every kind it can capture and carry on. Record the missing kind and why in your handover. Never ask for desktop access, an app, a sign-in or a credential to capture proof.
 
 Run `neuve proof list` before handing over. A video requirement without a video record shows as **Missing**. The reviewer judges the proof using the [verification guide](review-verification.md).
 
@@ -33,7 +33,7 @@ neuve proof record <base>..<head> --kind test-run --claim "<what the output show
 
 ## The MCP tools
 
-`neuve mcp` serves two tools over stdio, `record_proof` and `vent`, for the agent session that starts it. The person adds it to their agent as a stdio MCP server whose command is `neuve mcp`. Don't change their agent settings yourself unless they ask.
+`neuve mcp` serves two tools over stdio, `record_proof` and `vent`, for the agent session that starts it. `record_proof` records what `neuve proof record` does. Use it when your session has it and `neuve proof record` can't tie the call to your session, as inside a sandbox. Ace offers it to its Codex chats. Elsewhere the person adds it to their agent as a stdio MCP server whose command is `neuve mcp`. Don't change their agent settings yourself unless they ask.
 
 ## Say what is hard
 

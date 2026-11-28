@@ -437,7 +437,7 @@ describe("inherited Git state", () => {
 		}
 	});
 
-	test("a host configuration drops every variable Git lists as repository-local", async () => {
+	test("a host configuration drops repository-local Git variables and the workspace project override", async () => {
 		const at = await setup();
 		const listed = (await git(at.project, "rev-parse", "--local-env-vars")).split("\n");
 		expect([...GIT_LOCAL]).toEqual(expect.arrayContaining(listed));
@@ -446,7 +446,12 @@ describe("inherited Git state", () => {
 			lanes: at.lanes,
 			user: OWNER,
 			port: 0,
-			environment: { ...Object.fromEntries(listed.map((name) => [name, "inherited"])), HOME: "/home/owner", GIT_ASKPASS: "askpass" },
+			environment: {
+				...Object.fromEntries(listed.map((name) => [name, "inherited"])),
+				NEUVE_WORKSPACE_PROJECT: at.project,
+				HOME: "/home/owner",
+				GIT_ASKPASS: "askpass",
+			},
 			worker: ["bun", "worker.ts"],
 		});
 		expect(parsed.environment).toEqual({ HOME: "/home/owner", GIT_ASKPASS: "askpass" });

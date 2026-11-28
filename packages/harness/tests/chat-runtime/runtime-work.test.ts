@@ -3,7 +3,7 @@
 // tool call that is running, with the outcome the runtime reported, keep the turn's later output
 // in order, release nothing back to the runtime, and send the turn the chat's own folder. pi's
 // shell and file tools and the pass-through itself are never served to such a runtime.
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Type, type SystemMessage } from "@earendil-works/pi-ai";
 import {
   defineExtension,
@@ -20,7 +20,9 @@ import {
   type RuntimeSession,
   type SessionPolicy,
 } from "@neuve/runtime";
+import { capabilities, openCodexSession } from "@neuve/runtime-codex";
 import { Cause, Effect, Queue, Stream } from "effect";
+import { codex, completed } from "../../../runtime-codex/tests/codex-fake.ts";
 import { STOP_ENTRY_KIND } from "../../src/chat-runtime/extension.ts";
 import {
   ATTENDED_SECTION,
@@ -209,6 +211,85 @@ test("attended and unattended requests reopen the same chat with the correspondi
       fake.opened[0]?.policy.systemPrompt,
     );
   } finally {
+    await run.close();
+  }
+});
+
+test("an attended Codex write turn launches Neuve proof with its chat identity", async () => {
+  const server = codex();
+  const run = await fixture({
+    channel: "proof-fixture",
+    accounts: [
+      Account.parse({
+        name: "codex",
+        kind: "chatgpt-subscription",
+        runtime: "codex",
+        credential: { kind: "codex-home" },
+      }),
+    ],
+    runtimes: [
+      {
+        ...new FakeRuntime().shape,
+        kind: "codex",
+        continuation: ({ name }) => ({ runtime: "codex", key: name }),
+        capabilities: () => Effect.succeed(capabilities),
+        openSession: (account, policy, start) =>
+          openCodexSession({
+            account: account.name,
+            program: "/fixture/codex",
+            cwd: "/work",
+            environment: {},
+            policy,
+            start,
+          }).pipe(Effect.provide(server.layer)),
+      },
+    ],
+  });
+  const which = Bun.which;
+  const lookup = spyOn(Bun, "which").mockImplementation((command, options) =>
+    command === "neuve" ? "/fixture/bin/neuve" : which(command, options),
+  );
+  try {
+    run.pi.install(
+      defineExtension({
+        name: "attended-proof-test",
+        hooks: [
+          hook(GenerationTask, {
+            beforeRequest({ messages }) {
+              const marker: SystemMessage = {
+                role: "system",
+                content: "",
+                sections: { [ATTENDED_SECTION]: "true" },
+                timestamp: 0,
+              };
+              return { messages: [...messages, marker] };
+            },
+          }),
+        ],
+      }),
+    );
+    await run.conversation.configure({ cwd: "/work" }, context);
+    const submitted = run.submit("Record proof after changing the notes");
+    await until(
+      () =>
+        server.processes
+          .at(-1)
+          ?.io.written.some(({ method }) => method === "turn/start") ?? false,
+    );
+    expect(
+      server
+        .current()
+        .args.filter((arg) => arg.startsWith("mcp_servers.neuve_proof.")),
+    ).toEqual([
+      'mcp_servers.neuve_proof.command="/fixture/bin/neuve"',
+      'mcp_servers.neuve_proof.args=["mcp","--repo","/work"]',
+      `mcp_servers.neuve_proof.env={"NEUVE_ACE_CHAT"="proof-fixture/${run.conversation.id}"}`,
+      'mcp_servers.neuve_proof.default_tools_approval_mode="approve"',
+    ]);
+    server.send("turn/completed", completed("completed"));
+    expect((await submitted).status).toBe("done");
+  } finally {
+    lookup.mockRestore();
     await run.close();
   }
 });

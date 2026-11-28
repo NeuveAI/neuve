@@ -82,10 +82,12 @@ export const HostConfigSchema = z.strictObject({
 	webPort: z.int().min(0).max(65_535).optional(),
 	/**
 	 * The complete environment for workers, terminals, and Git: `spawnEnvironment(storage, env)`,
-	 * without Git's repository-local variables or an inherited Ace chat.
+	 * without Git's repository-local variables, an inherited Ace chat, or a workspace project override.
 	 */
 	environment: z.record(z.string(), z.string()).transform((environment) =>
-		Object.fromEntries(Object.entries(environment).filter(([name]) => !GIT_LOCAL.has(name) && name !== Identity.ACE_CHAT_VARIABLE))
+		Object.fromEntries(Object.entries(environment).filter(([name]) =>
+			!GIT_LOCAL.has(name) && name !== Identity.ACE_CHAT_VARIABLE && name !== "NEUVE_WORKSPACE_PROJECT"
+		))
 	),
 	/** The command that runs `runWorker`; the channel ID is appended. */
 	worker: z.tuple([z.string().min(1)], z.string().min(1)),
