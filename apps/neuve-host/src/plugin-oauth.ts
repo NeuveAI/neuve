@@ -198,7 +198,7 @@ export class PluginOAuth {
 			},
 		};
 
-		const probe = new Client({ name: "ace", version: "1" });
+		const probe = new Client({ name: "neuve", version: "1" });
 		try {
 			diagnostic.step = "probe";
 			await probe.connect(new StreamableHTTPClientTransport(server.url, {

@@ -99,7 +99,7 @@ async function connect(
 			const scoped = browserPlugin(plugin) && config.type === "stdio";
 			const oauth = plugin.oauth.get(server);
 			const { client, transport: wire } = oauth ? pluginMcp(oauth, lookup) : {
-				client: new Client({ name: "ace", version: "1" }),
+				client: new Client({ name: "neuve", version: "1" }),
 				// Discovery only lists tools, so a chat-scoped server gets only the temporary directory here.
 				transport: transport(config, credentials, scoped ? chatFolder(tmpdir()) : undefined),
 			};
@@ -116,7 +116,7 @@ async function connect(
 					const chat = chatClients.get(key);
 					if (chat) return { kind: "succeeded", value: chat };
 					scopeSignal.throwIfAborted();
-					const next = new Client({ name: "ace", version: "1" }, { capabilities: { roots: {} } });
+					const next = new Client({ name: "neuve", version: "1" }, { capabilities: { roots: {} } });
 					next.setRequestHandler("roots/list", () => ({ roots: [{ uri: pathToFileURL(folder).href }] }));
 					opened.set(next, { plugin: plugin.name });
 					connection.clients.add(next);

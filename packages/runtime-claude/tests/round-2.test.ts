@@ -1,4 +1,3 @@
-// Verify Claude Code receives native search only for a policy with deferred tools.
 import { expect, test } from "bun:test";
 import type {
   Options,
