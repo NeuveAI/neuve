@@ -96,9 +96,10 @@ export class PullReaders {
 					for (const listener of reader.listeners) listener(state);
 				}
 				if (changed) this.changed?.(repo, branch);
-				if (!signal.aborted && open(state.pull)) {
-					const pending = state.pull.state === "draft" || state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending");
-					reader.timer = setTimeout(() => void this.#read(reader), pending && !state.error ? this.cadence.pending : this.cadence.idle);
+				if (!signal.aborted && (state.pull === null || open(state.pull))) {
+					const pending = state.pull === null || !!state.error || state.pull.state === "draft"
+						|| state.pull.merge === "unknown" || state.pull.checks.some(check => check.state === "pending");
+					reader.timer = setTimeout(() => void this.#read(reader), pending ? this.cadence.pending : this.cadence.idle);
 				}
 				return { kind: "succeeded", value: undefined };
 			},

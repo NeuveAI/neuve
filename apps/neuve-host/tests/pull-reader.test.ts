@@ -160,6 +160,50 @@ test("a repeat watch discovers a newly published draft in the channel repository
 	}
 });
 
+test("a watched branch discovers a draft published after an empty read", async () => {
+	const reads: (string | null)[] = [];
+	const github = transport((url, tag) => {
+		if (url.pathname.endsWith("/pulls")) {
+			reads.push(tag);
+			if (reads.length === 1) return Response.json([], { headers: { etag: '"missing"' } });
+			if (reads.length === 2) return new Response(null, { status: 304 });
+			return Response.json([detail(7, branch, "open", true)]);
+		}
+		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch, "open", true));
+	});
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10_000 });
+	try {
+		const card = updates(readers, branch);
+		await until(() => card.values.at(-1)?.pull?.state === "draft");
+		expect(card.values.map(value => value.pull?.number ?? null)).toEqual([null, 7]);
+		expect(reads).toEqual([null, '"missing"', '"missing"']);
+	} finally {
+		readers.close();
+	}
+});
+
+test("a watched branch recovers after its first read fails", async () => {
+	let finds = 0;
+	const github = transport(url => {
+		if (url.pathname.endsWith("/pulls")) {
+			if (++finds === 1) throw new Error("GitHub is unavailable.");
+			return Response.json([detail(7, branch, "open", true)]);
+		}
+		if (url.pathname.endsWith("/pulls/7")) return Response.json(detail(7, branch, "open", true));
+	});
+	const readers = new PullReaders(github, () => {}, undefined, { pending: 10, idle: 10_000 });
+	try {
+		const card = updates(readers, branch);
+		await until(() => card.values.at(-1)?.pull?.state === "draft");
+		expect(card.values[0]).toEqual({ pull: null, error: "GitHub is unavailable." });
+		expect(card.values).toHaveLength(2);
+		expect(card.values[1]?.pull?.number).toBe(7);
+		expect(card.values[1]?.error).toBeUndefined();
+	} finally {
+		readers.close();
+	}
+});
+
 test("a watched draft refreshes on the pending cadence", async () => {
 	const reads: (string | null)[] = [];
 	const github = transport((url, tag) => {
