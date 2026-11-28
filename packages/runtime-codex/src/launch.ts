@@ -4,6 +4,7 @@
  * Codex's configuration is fixed when its process starts, so the two configurations below are two
  * processes: the person's own Codex, and a clean one for a read-only turn.
  */
+import { dirname, join } from "node:path";
 import type { SessionPolicy, TurnWorkspace } from "@neuve/runtime";
 import type { AskForApproval } from "./generated/v2/AskForApproval";
 import type { SandboxPolicy } from "./generated/v2/SandboxPolicy";
@@ -197,15 +198,48 @@ export interface TurnSettings {
   readonly sandboxPolicy: SandboxPolicy;
 }
 
+export interface GitWorktree {
+  readonly gitDir: string;
+  readonly commonDir: string;
+  readonly head: string;
+}
+
+const worktreeWriteRoots = (git: GitWorktree | undefined): string[] => {
+  if (
+    !git ||
+    git.gitDir === git.commonDir ||
+    !git.head.startsWith("refs/heads/")
+  )
+    return [];
+  const refFolder = dirname(git.head);
+  if (refFolder === "refs/heads") return [];
+  // Only the host or person can move HEAD, so it can name the channel for the next turn.
+  return [
+    ...[
+      "index",
+      "index.lock",
+      "HEAD.lock",
+      "ORIG_HEAD",
+      "ORIG_HEAD.lock",
+      "COMMIT_EDITMSG",
+      "logs",
+    ].map((entry) => join(git.gitDir, entry)),
+    join(git.commonDir, "objects"),
+    join(git.commonDir, refFolder),
+    join(git.commonDir, "logs", refFolder),
+  ];
+};
+
 /**
- * The mode table. Read only: Codex's read-only sandbox, nothing asked, a clean session. Write,
- * attended ("ask"): writes in the working folder only, Codex asks on request. Write, unattended
- * ("allow"): the same sandbox, nothing asked. Network is off, Codex's own default; the temporary
- * folders are not writable, so a write outside the working folder fails.
+ * Read-only turns run clean and ask nothing. Write turns can write in the chat's folder and,
+ * in a work lane, the Git paths needed to commit on the channel's branch. The sandbox protects
+ * hooks, Git settings, packed-refs, branches outside the channel, and the lane's HEAD, commondir,
+ * gitdir, and config.worktree. Attended write turns ask on request. Unattended turns ask nothing.
  */
 export const turnSettings = (
   workspace: TurnWorkspace,
   approvals: SessionPolicy["approvalPolicy"],
+  git?: GitWorktree,
 ): TurnSettings =>
   workspace.access === "read-only"
     ? {
@@ -218,7 +252,7 @@ export const turnSettings = (
         approvalPolicy: approvals === "ask" ? "on-request" : UNATTENDED,
         sandboxPolicy: {
           type: "workspaceWrite",
-          writableRoots: [workspace.folder],
+          writableRoots: [workspace.folder, ...worktreeWriteRoots(git)],
           networkAccess: false,
           excludeTmpdirEnvVar: true,
           excludeSlashTmp: true,
