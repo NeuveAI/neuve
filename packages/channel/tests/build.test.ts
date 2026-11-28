@@ -14,6 +14,7 @@ import { ApprovalRequestsDoc } from "../src/approvals";
 import { BuildsDoc, type BuildHost } from "../src/build";
 import { buildWorktree } from "../src/external-lanes";
 import { EventSchema } from "../src/frame";
+import { LanesDoc } from "../src/lanes";
 import { PlansDoc } from "../src/plan";
 import { ReviewCardsDoc, type ReviewCard } from "../src/review-cards";
 import type { Build, Plan, Request, RunEnd, Said } from "../src/protocol";
@@ -22,6 +23,8 @@ import { Fixture, git, MODEL, OWNER, scratchEnv, until, type Watch } from "./hel
 const context = BACKGROUND_CONTEXT;
 const planText = "# Export retries\n\nKeep the retry in the export queue.";
 const revisedText = "# Export retries, revised\n\nKeep the retry in the export queue until delivery.";
+const startReviewerGuidance = "Once you push your work, use agent_start to start the plan's reviewer.";
+const publishedReviewGuidance = "The pull request becomes ready only after the plan's reviewer approves the work and their Neuve review publishes.";
 const postReviewPushGuidance = "If you push a new head to the plan's branch after the plan's Neuve review has published, use agent_message to ask the plan's reviewer to review the new head and request a fresh Neuve review once they approve it.";
 const tool = (name: string, args: Parameters<typeof fauxToolCall>[1], id: string) =>
 	fauxAssistantMessage(fauxToolCall(name, args, { id }), { stopReason: "toolUse" });
@@ -43,7 +46,8 @@ async function setup(options: {
 	beforeSharedResult?(): Promise<void>;
 	onSharedWait?(): void;
 	onStep?(step: string): void;
-	onBuildPulls?: Fixture["options"]["onBuildPulls"];
+	pulls?: BuildHost["pulls"];
+	onPlans?: Fixture["options"]["onPlans"];
 	nonTurnModels?: Fixture["options"]["nonTurnModels"];
 	wrapTool?(tool: ToolRegistration): ToolRegistration;
 } = {}) {
@@ -79,6 +83,7 @@ async function setup(options: {
 			return result;
 		},
 		...(options.withoutQuery ? {} : { query: { sessionId: "one", read: request => read(request) } }),
+		pulls: options.pulls,
 	};
 	const fixture = await Fixture.create({
 		planFiles: {
@@ -95,7 +100,7 @@ async function setup(options: {
 		log: (_level, step) => options.onStep?.(step),
 		onSaid: value => said.push(value),
 		onRun: value => runs.push(value),
-		onBuildPulls: options.onBuildPulls,
+		onPlans: options.onPlans,
 	});
 	fixtures.push(fixture);
 	const plans = join(fixture.root, "plans");
@@ -154,6 +159,9 @@ test("approval starts one ownerless implementer with the marked brief and write 
 			expect(brief.text).toContain(text);
 		}
 		expect(brief.text).toContain(planText);
+		expect(brief.text).toContain(startReviewerGuidance);
+		expect(brief.text).toContain(publishedReviewGuidance);
+		expect(brief.text).toContain("Do not run gh pr create, gh pr ready or gh pr merge yourself.");
 		expect(brief.text).toContain(postReviewPushGuidance);
 		expect(brief.text).toContain("Ask for your scope with neuve_query");
 		expect(brief.text).not.toContain("neuve query");
@@ -521,75 +529,194 @@ async function startBuild(run: Awaited<ReturnType<typeof setup>>, reply: FauxRes
 	return { plan, build, chat, agent };
 }
 
-// A new plan in the same channel must not inherit the merged plan's branch or review.
-test("a published review and a merge follow the plan, and the next plan gets its own branch", async () => {
-	let pulls: Parameters<NonNullable<Fixture["options"]["onBuildPulls"]>>[0] = [];
-	const run = await setup({ onBuildPulls: value => { pulls = value; } });
-	const { fixture, watch } = run;
-	const { plan, build, chat } = await startBuild(run);
-	const branch = run.worktrees[0]!.branch;
-	expect(build.branch).toBe(branch);
-	expect(await fixture.channel.planPullText(build.id, branch)).toBe(planText);
-
-	fixture.script(
-		tool("agent_start", { role: "reviewer" }, "start-for-pull"),
-		fauxAssistantMessage("Review started."),
-		fauxAssistantMessage("Review finished."),
-	);
-	await fixture.request({ op: "wait", submission: await wake(run, "Start the reviewer.", chat) });
-	const withReviewer = await watch.until("builds", event => event.builds[0]?.agents.some(agent => agent.role === "reviewer") === true);
-	const reviewer = withReviewer.builds[0]!.agents.find(agent => agent.role === "reviewer")!;
-	await until(() => fixture.channel.isIdle());
-	const head = git(run.worktrees[0]!.path, "rev-parse", "HEAD").trim();
-	const card: Extract<ReviewCard, { kind: "review" }> = {
-		kind: "review", review: "review", source: "lane", label: "Review the plan", recovered: false, notify: false,
-		range: { branch, base: head, head, commits: 0 }, phase: "finished", stage: null, stages: [],
-		finished: { units: 2, byReviewLane: { humanRequired: 2, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 2, complete: true, gaps: 0, undecoded: 0 },
-		links: { batch: "/batch", desk: "/desk" }, stopped: null, newCommits: null, updatedAt: 2,
+test("a plan's pull request follows its pushed and reviewed head through merge", async () => {
+	const repo = "owner/project";
+	type Pull = {
+		number: number; branch: string; base: string; title: string; body?: string;
+		isDraft: boolean; headRefOid: string; state: "OPEN" | "MERGED";
 	};
-	await run.harness.commit(async tx => {
-		(await tx.doc(ReviewCardsDoc, reviewer.chat as ConversationId)).cards.review = card;
-		(await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards.older = {
-			...card, review: "older", updatedAt: 1,
-		};
-	}, context);
-	const reviewed = await watch.until("builds", event => event.builds[0]?.review?.chat === reviewer.chat);
-	expect(EventSchema.parse(reviewed)).toEqual(reviewed);
-	expect(reviewed.builds[0]!.review).toEqual({
-		chat: reviewer.chat, review: "review", phase: "finished", head, humanRequired: 2, desk: "/desk",
+	const pulls = new Map<string, Pull>();
+	const log: string[] = [];
+	const created: string[] = [];
+	const mergeHeads: string[] = [];
+	let project: string;
+	let origin: string;
+	let plans: Parameters<NonNullable<Fixture["options"]["onPlans"]>>[0];
+	const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
+	const run = await setup({
+		onPlans: value => { plans = value; },
+		onStep: event => log.push(event),
+		pulls: {
+			repo,
+			async git(args) {
+				const result = Bun.spawnSync(["git", "-C", project, ...args], { stdout: "pipe", stderr: "pipe" });
+				return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
+			},
+			async gh(args, body) {
+				const [group, command, selector] = args;
+				if (group === "repo" && command === "view") {
+					expect(selector).toBe(repo);
+					return JSON.stringify({ squashMergeAllowed: false, mergeCommitAllowed: true, rebaseMergeAllowed: true });
+				}
+				expect(flag(args, "--repo")).toBe(repo);
+				const branch = command === "create" ? flag(args, "--head")! : selector!;
+				if (group === "pr" && command === "create") {
+					created.push(branch);
+					expect(args).toContain("--draft");
+					expect(flag(args, "--body-file")).toBe("-");
+					if (pulls.has(branch)) throw new Error("A pull request already exists.");
+					const pull: Pull = {
+						number: 11 + pulls.size, branch, base: flag(args, "--base")!, title: flag(args, "--title")!, body,
+						isDraft: true, headRefOid: git(origin, "rev-parse", `refs/heads/${branch}`).trim(), state: "OPEN",
+					};
+					pulls.set(branch, pull);
+					return `https://github.test/${repo}/pull/${pull.number}\n`;
+				}
+				const pull = pulls.get(branch) ?? [...pulls.values()].find(pull => String(pull.number) === selector);
+				if (!pull) throw new Error(`no pull requests found for branch "${branch}"`);
+				if (group === "pr" && command === "view") {
+					if (pull.state === "OPEN") pull.headRefOid = git(origin, "rev-parse", `refs/heads/${pull.branch}`).trim();
+					return JSON.stringify(pull);
+				}
+				if (group === "pr" && command === "ready") {
+					pull.isDraft = args.includes("--undo");
+					return "";
+				}
+				if (group === "pr" && command === "merge") {
+					expect(args).toContain("--merge");
+					expect(args).toContain("--delete-branch");
+					const head = flag(args, "--match-head-commit")!;
+					mergeHeads.push(head);
+					if (head !== pull.headRefOid) throw new Error("Head commit has changed since the last review.");
+					pull.state = "MERGED";
+					git(origin, "update-ref", "-d", `refs/heads/${pull.branch}`, head);
+					return "";
+				}
+				throw new Error(`Unexpected GitHub CLI command: ${args.join(" ")}`);
+			},
+		},
 	});
-	await run.harness.commit(async tx => {
-		const { cards } = await tx.doc(ReviewCardsDoc, chat as ConversationId);
-		cards.older = {
-			...card, review: "older", updatedAt: 3, newCommits: { head: "b".repeat(40) },
-			finished: { units: 1, byReviewLane: { humanRequired: 1, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 1, complete: true, gaps: 0, undecoded: 0 },
-		};
-		cards.newer = {
-			...card, review: "newer", phase: "running", finished: null, links: null, updatedAt: 4,
-		};
-	}, context);
-	await watch.until("builds", event => event.builds[0]?.review?.review === "newer");
-	expect(pulls.find(row => row.build.id === build.id)?.finishedReview).toEqual({
-		humanRequired: 2, reviewerHeads: [head],
+	const { fixture, watch, worktrees } = run;
+	project = fixture.project;
+	origin = join(fixture.root, "scratch origin");
+	git(fixture.root, "clone", "--bare", "-q", project, origin);
+	git(origin, "branch", "-m", "main", "trunk");
+	git(project, "remote", "add", "origin", origin);
+
+	const { plan, build, chat } = await startBuild(run);
+	const firstLane = worktrees[0]!;
+	const { branch } = firstLane;
+	expect(build.branch).toBe(branch);
+	expect(pulls.size).toBe(0);
+
+	function push(message: string) {
+		git(firstLane.path, "commit", "--allow-empty", "-qm", message);
+		git(firstLane.path, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+		return git(firstLane.path, "rev-parse", "HEAD").trim();
+	}
+	const firstHead = push("Implement export retries");
+	async function startReviewer(part?: string) {
+		fixture.script(tool("agent_start", { role: "reviewer", ...(part ? { part } : {}) }, part ?? "start-for-pull"),
+			fauxAssistantMessage("Review started."), fauxAssistantMessage("Review finished."));
+		await fixture.request({ op: "wait", submission: await wake(run, "Start the reviewer.", chat) });
+		const withReviewer = await watch.until("builds", event =>
+			event.builds[0]?.agents.some(agent => agent.role === "reviewer" && agent.part === part) === true);
+		await until(() => fixture.channel.isIdle());
+		return withReviewer.builds[0]!.agents.find(agent => agent.role === "reviewer" && agent.part === part)!;
+	}
+	const reviewer = await startReviewer();
+	await startReviewer("exports");
+	const pull = await until(() => pulls.get(branch));
+	expect(pull).toEqual({
+		number: 11, branch, base: "trunk", title: plan.title, body: planText,
+		isDraft: true, headRefOid: firstHead, state: "OPEN",
 	});
 
-	await fixture.channel.planPullMerged({ build: build.id, branch, head, number: 11, at: 25 });
+	let update = 0;
+	async function publish(chat: number, review: string, head: string) {
+		const card: Extract<ReviewCard, { kind: "review" }> = {
+			kind: "review", review, source: "lane", label: "Review the plan", recovered: false, notify: false,
+			range: { branch, base: firstHead, head, commits: 1 }, phase: "finished", stage: null, stages: [],
+			finished: { units: 2, byReviewLane: { humanRequired: 2, humanSuggested: 0, static: 0, agentic: 0 }, needJudgment: 2, complete: true, gaps: 0, undecoded: 0 },
+			links: { batch: "/batch", desk: "/desk" }, stopped: null, newCommits: null, updatedAt: ++update,
+		};
+		await run.harness.commit(async tx => {
+			(await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards[review] = card;
+		}, context);
+		const event = await watch.until("builds", event => event.builds[0]?.review?.review === review);
+		expect(EventSchema.parse(event)).toEqual(event);
+		return event.builds[0]!.review;
+	}
+	await publish(chat, "implementer-review", firstHead);
+	await until(() => fixture.channel.isIdle());
+	expect(pull.isDraft).toBe(true);
+	expect(await publish(reviewer.chat, "reviewer-review-1", firstHead)).toEqual({
+		chat: reviewer.chat, review: "reviewer-review-1", phase: "finished", head: firstHead, humanRequired: 2, desk: "/desk",
+	});
+	await until(() => !pull.isDraft);
+	expect(plans).toMatchObject({ branches: [branch], humanRequired: 2 });
+
+	git(firstLane.path, "commit", "--allow-empty", "-qm", "Cover one more retry");
+	const head = git(firstLane.path, "rev-parse", "HEAD").trim();
+	await publish(reviewer.chat, "reviewer-review-2", head);
+	await publish(reviewer.chat, "reviewer-review-3", firstHead);
+	expect(pull.isDraft).toBe(false);
+	git(firstLane.path, "push", "-q", "origin", `HEAD:refs/heads/${branch}`);
+	fixture.script(fauxAssistantMessage("New head pushed."));
+	await fixture.request({ op: "wait", submission: await wake(run, "Cover another retry.", chat) });
+	await until(() => pull.isDraft);
+	expect(pull.headRefOid).toBe(head);
+	await publish(reviewer.chat, "reviewer-review-4", head);
+	await until(() => !pull.isDraft);
+
+	const request = { op: "build-merge", author: OWNER, build: build.id, number: 11, head } satisfies Request;
+	await expect(fixture.request({ ...request, author: "teammate" })).rejects.toThrow("only its owner");
+	await expect(fixture.request({ ...request, author: "agent@other" })).rejects.toThrow("Only a person");
+	await expect(fixture.request({ ...request, head: firstHead })).rejects.toThrow("Head commit has changed since the last review.");
+	expect(pull.state).toBe("OPEN");
+	expect(await Bun.file(join(firstLane.path, "README.md")).exists()).toBe(true);
+
+	const [, dirtyLane, movedLane] = worktrees;
+	await writeFile(join(dirtyLane!.path, "local.txt"), "uncommitted review notes");
+	await Promise.all([fixture.request(request), fixture.request(request)]);
 	const merged = await watch.until("builds", event => event.builds[0]?.merged?.number === 11);
 	expect(EventSchema.parse(merged)).toEqual(merged);
 	expect(merged.builds[0]).toMatchObject({
-		merged: { number: 11, at: 25 }, agents: [{ state: "done" }, { state: "done" }],
+		merged: { number: 11 }, agents: [{ state: "done" }, { state: "done" }, { state: "done" }],
 	});
-	await expect(fixture.channel.planPullText(build.id, branch)).rejects.toThrow("no longer open");
+	expect(pull.state).toBe("MERGED");
+	expect(mergeHeads).toEqual([firstHead, head]);
+	expect(plans).toBeUndefined();
+	expect(await Bun.file(join(firstLane.path, "README.md")).exists()).toBe(false);
+	expect(git(project, "branch", "--list", branch)).toBe("");
+	expect(await readFile(join(dirtyLane!.path, "local.txt"), "utf8")).toBe("uncommitted review notes");
+	expect(git(project, "rev-parse", `refs/heads/${movedLane!.branch}`).trim()).toBe(firstHead);
+	const recorded = (await run.harness.snapshot(LanesDoc, context))!.lanes;
+	expect(Object.values(recorded).map(lane => lane.path)).toEqual(expect.arrayContaining([dirtyLane!.path, movedLane!.path]));
+	expect(Object.values(recorded).map(lane => lane.path)).not.toContain(firstLane.path);
+	expect(log.filter(event => event.startsWith("pull.") && event !== "pull.merge.failed")).toEqual([
+		"pull.draft.opened", "pull.ready", "pull.review.stale", "pull.ready", "pull.merged",
+	]);
 
 	const other = await run.draft(revisedText);
 	expect(other.id).not.toBe(plan.id);
-	fixture.script(fauxAssistantMessage("Second plan ready."));
+	fixture.script(() => {
+		const lane = worktrees[3]!;
+		git(lane.path, "push", "-q", "origin", `HEAD:refs/heads/${lane.branch}`);
+		pulls.set(lane.branch, {
+			number: 27, branch: lane.branch, base: "trunk", title: "A person's draft", body: "Existing text",
+			isDraft: true, headRefOid: git(lane.path, "rev-parse", "HEAD").trim(), state: "OPEN",
+		});
+		return fauxAssistantMessage("Second plan ready.");
+	});
 	await run.approve(other);
 	const second = await buildAt(watch, 1, "started");
-	expect(second.branch).toBe(run.worktrees[2]!.branch);
+	expect(second.branch).toBe(worktrees[3]!.branch);
 	expect(second.branch).not.toBe(branch);
 	expect(second.review).toBeUndefined();
-	expect(await fixture.channel.planPullText(second.id, second.branch!)).toBe(revisedText);
+	await until(() => fixture.channel.isIdle());
+	expect(pulls.get(second.branch!)).toMatchObject({ number: 27, title: "A person's draft", body: "Existing text", isDraft: true });
+	expect(created).toEqual([branch]);
 });
 
 async function invoke(fixture: Fixture, text: string, chat?: number) {
@@ -947,6 +1074,8 @@ test("a second implementer gets its own branch, the approved model settings, and
 	const message = await watch.until("message");
 	expect(message).toMatchObject({ system: { kind: "neuve:build:brief", build: build.id } });
 	for (const text of [plan.title, plan.hash, planText, worktree.branch, "neuve_query", "Load the Neuve skill."]) expect(message.text).toContain(text);
+	expect(message.text).toContain(startReviewerGuidance);
+	expect(message.text).toContain(publishedReviewGuidance);
 	expect(message.text).toContain(postReviewPushGuidance);
 	expect(message.text).not.toContain(run.plans);
 	expect(message.text.split("\n\n").at(-1)).toBe(brief);

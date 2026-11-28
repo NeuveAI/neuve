@@ -1,4 +1,4 @@
-import { removePlanWorktree } from "./plan-worktree";
+import { project as githubProject, runGh } from "./github";
 import { hostname, platform, arch } from "node:os";
 import * as catalog from "./catalog";
 import { nativeReview, startReviewFeed } from "./native-review";
@@ -167,6 +167,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	const worker: WorkerContext = {sessionId: options.id, config, stateDirectory};
 	const query = setup?.query;
 	const work = new SharedWork<unknown>();
+	const repo = place && await githubProject(place.project);
 	const build: Options["build"] = place ? {
 		async share<T>(key: string, run: () => Promise<T>) {
 			const { outcome } = await work.run({
@@ -176,9 +177,11 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 			// A key identifies one operation and therefore one result type.
 			return outcome.value as T;
 		},
-		removeWorktree: (lane, worktree, head) => removePlanWorktree({
-			project: place.project, directory: place.lanes, prefix: place.name, lane, ...worktree, head,
-		}, options.log),
+		...(repo ? { pulls: {
+			repo, gh: runGh,
+			git: args => git(place.project, ["--no-optional-locks", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+				"-c", "protocol.ext.allow=never", ...args]),
+		} } : {}),
 		async worktree(...[target, source]) {
 			if (typeof target === "string") return buildWorktree(place, target, BACKGROUND_CONTEXT, source);
 			const name = `chat-${target.chat}`;

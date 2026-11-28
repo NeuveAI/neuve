@@ -17,9 +17,6 @@ const channel = z.string();
 const terminal = z.string();
 const pullBranch = z.string().min(1).max(1024);
 const pullSubscription = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
-const buildId = z.string().regex(/^\d+:[a-f0-9]{64}$/);
-const pullHead = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
-const pullNumber = z.int().positive();
 /** Terminal dimensions a PTY accepts. */
 const size = z.int().min(1).max(1000);
 const chat = z.int().nonnegative().optional();
@@ -92,7 +89,6 @@ z.strictObject({ op: z.literal("github-detail"), repo: z.string(), kind: GithubK
 z.strictObject({ op: z.literal("github-files"), repo: z.string(), number: z.int().positive() }),
 z.strictObject({ op: z.literal("github-pull-watch"), repo: z.string(), branch: pullBranch, subscription: pullSubscription }),
 z.strictObject({ op: z.literal("github-pull-unwatch"), subscription: pullSubscription }),
-z.strictObject({ op: z.literal("plan-pull-merge"), channel, build: buildId, number: pullNumber, head: pullHead }),
 z.strictObject({ op: z.literal("settings"), fresh: z.boolean().optional() }),
 z.strictObject({ op: z.literal("preferences"), model: ModelRefSchema.nullable().optional(), folder: z.string().optional(), plugins: PluginPreferences.optional(), compute: z.object({ enabled: z.boolean(), url: z.string().nullable() }).optional() }),
 z.strictObject({ op: z.literal("folder") }),
@@ -200,8 +196,6 @@ export function parseWorkerEnvelope(text: string): { id: number; trace?: string 
 	const envelope = EnvelopeSchema.parse(JSON.parse(text));
 	const { id, trace, ...body } = envelope;
 	const parsed = z.union([z.strictObject({ op: z.literal("worker") }), z.strictObject({op: z.literal("freeze")}), z.strictObject({op: z.literal("export")}),
-		z.strictObject({ op: z.literal("plan-pull-text"), build: buildId, branch: pullBranch }),
-		z.strictObject({ op: z.literal("plan-pull-merged"), build: buildId, branch: pullBranch, number: pullNumber, head: pullHead, at: z.number() }),
 		RequestSchema, ExtensionRequestSchema, NativeSourceRequestSchema]).parse(body);
 	return { id, ...(trace === undefined ? {} : { trace }), ...parsed };
 }

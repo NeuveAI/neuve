@@ -26,7 +26,7 @@ import * as served from "./directory-server";
 import { retryLoginShell, shell } from "./environment";
 import type { GatewayClient, Watch } from "./gateway-client";
 import * as github from "./github";
-import { PlanPulls } from "./plan-pulls";
+import { PullReaders } from "./pull-reader";
 import { describe, health, HostConflict } from "./health";
 import { seal } from "./keys";
 import * as lobby from "./lobby";
@@ -107,7 +107,7 @@ let name = hostname();
 /** Where teammates reach the directory this host serves, once it's on the tailnet. */
 let servedUrl: string | undefined;
 let closing = false;
-let planPulls = new PlanPulls();
+let pulls: PullReaders;
 let updating = false;
 let update = 0;
 let suspending: Promise<unknown> | undefined;
@@ -158,9 +158,14 @@ async function local(): Promise<Listing[]> {
 		if (ran) listing.ran = ran;
 		if (said) listing.said = said;
 		if (mentions) listing.mentions = mentions;
-		const plans = planPulls.summary(id);
-		if (plans) listing.plans = plans;
 		const { root, repo } = checkouts[index]!;
+		if (record.plans) {
+			const ready = repo !== undefined && record.plans.branches.some(branch => {
+				const pull = pulls.current(repo, branch);
+				return pull?.state === "open" && pull.merge === "ready";
+			});
+			listing.plans = { ...record.plans, ...(ready ? { ready } : {}) };
+		}
 		listing.root = root;
 		if (repo) listing.repo = repo;
 		if (hosted) listing.hosted = hosted;
@@ -724,7 +729,7 @@ async function handle(
 			return github.files(request.repo, request.number);
 		case "github-pull-watch": {
 			const { repo, branch, subscription } = request;
-			const detach = planPulls.readers.watch(repo, branch, value =>
+			const detach = pulls.watch(repo, branch, value =>
 				send({ githubPull: { subscription, repo, branch, ...value } }));
 			client.pulls.get(subscription)?.();
 			client.pulls.set(subscription, detach);
@@ -734,8 +739,6 @@ async function handle(
 			client.pulls.get(request.subscription)?.();
 			client.pulls.delete(request.subscription);
 			return;
-		case "plan-pull-merge":
-			return planPulls.merge(client, request);
 		case "settings":
 			if (request.fresh) {
 				void Promise.resolve().then(() => runtimeHooks().checkAccounts?.())
@@ -1333,7 +1336,7 @@ export type Gateway = {server: Server<Client>; stop(): Promise<void>};
 
 export async function start(port: number, loopback = false, script?: string, managed = false): Promise<Gateway> {
 	closing = false;
-	planPulls = new PlanPulls(undefined, () => { if (!closing && !updating) void broadcast(); });
+	pulls = new PullReaders(github.pullGithub(), log, () => { if (!closing && !updating) void broadcast(); });
 	config.port = port;
 	config.loopback = loopback;
 	// Channel workers and agent shells reach this listener for the owner's windows.
@@ -1367,7 +1370,7 @@ export async function start(port: number, loopback = false, script?: string, man
 	const servers = [server];
 	const cleanup: (() => void | Promise<void>)[] = [];
 	cleanup.push(accounts.onChange(accountsChanged));
-	cleanup.push(() => planPulls.close());
+	cleanup.push(() => pulls.close());
 	// A blocked event loop fails the desktop's health check, which then cannot tell a busy helper from a stopped one.
 	let tick = performance.now();
 	const stalls = setInterval(() => {
@@ -1502,7 +1505,6 @@ export async function start(port: number, loopback = false, script?: string, man
 	// Workers create and remove their sockets; tell clients when a channel starts or retires.
 	const watcher = watchCatalog(join(catalog.home, "channels"), (file) => {
 		if (closing || updating) return;
-		planPulls.changed(file);
 		catalogChanged(file);
 	}, error => {
 		log("error", "gateway.catalog.failed", failure(error));
@@ -1511,7 +1513,6 @@ export async function start(port: number, loopback = false, script?: string, man
 	cleanup.push(() => watcher.close());
 	await watcher.ready;
 	if (closing) throw new Error("Host closed during catalog watcher startup");
-	planPulls.start();
 	// A crashed worker leaves its socket and projection behind without a filesystem event.
 	// Probe only process liveness: sidebar observation must never attach to or wake a worker.
 	let crashed = new Set<string>();

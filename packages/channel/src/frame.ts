@@ -117,7 +117,7 @@ const AgentFailureSchema = z.object({
 	attempts: z.int().positive(),
 }) satisfies z.ZodType<AgentFailure>;
 
-export const BuildSchema = z.object({
+const BuildSchema = z.object({
 	id: text,
 	chat: id,
 	plan: z.object({ id: text, hash: text, title: text, call: text }),

@@ -415,6 +415,8 @@ export const AGENT_MODEL_TOOL = "set_agent_model";
  */
 export type AgentMessageArgs = { to: AgentRole; part?: string; text: string };
 
+export type PlanSummary = { branches: string[]; humanRequired?: number; waiting?: boolean };
+
 // End of builds.
 
 export type Chat = {
@@ -710,6 +712,7 @@ export type Request =
 	 * stopped build changes nothing.
 	 */
 	| { op: "build-stop"; author: string; build: string }
+	| { op: "build-merge"; author: string; build: string; number: number; head: string }
 	| { op: "share"; author: string; shared: boolean }
 	| { op: "desktop"; author: string; enabled: boolean }
 	| { op: "rename"; author: string; name: string }

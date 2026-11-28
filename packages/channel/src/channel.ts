@@ -97,7 +97,6 @@ import type {
 	ApprovalRequestsState,
 	BuildNotice,
 	ChannelInfo,
-	Changes,
 	Chat,
 	ChatId,
 	ChatMode,
@@ -205,8 +204,7 @@ export type Options = {
 	claim?(name: string, exact: boolean): Promise<string>;
 	/** Publish a projection of committed metadata to the runtime's channel catalog. */
 	onMetadata?(value: Metadata): void;
-	onBuildPulls?(value: ReturnType<Builds["pulls"]>): void;
-	onPullActivity?(activity: { cwd: string } | Pick<Changes, "branch" | "head">): void | Promise<void>;
+	onPlans?(value: ReturnType<Builds["summary"]>): void;
 	/** Publish when the transcript last grew, in epoch milliseconds. */
 	onActivity?(at: number): void;
 	/** Rebuildable channel-wide projection of pi live runs, including child chats. */
@@ -535,7 +533,7 @@ export class Channel {
 				}
 				if (change.record.kind === BuildsDoc.definition.kind) {
 					const woken = channel.#builds.observe(change.value as BuildsState | null);
-					channel.#publishBuildPulls();
+					channel.#publishPlans();
 					if (options.resume !== false && woken.length) void Promise.resolve().then(() => channel.#builds.resume(woken));
 					continue;
 				}
@@ -608,15 +606,6 @@ export class Channel {
 				channel.#backgroundTasks.add(task);
 				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
-			if (options.onPullActivity) {
-				for (const chat of endedChats) {
-					const task = channel.#place(chat).then(({ cwd, lane }) => {
-						if (lane) return options.onPullActivity?.({ cwd });
-					}).catch(error => log("warn", "pull.activity.failed", { chat, ...failure(error) }));
-					channel.#backgroundTasks.add(task);
-					void task.finally(() => channel.#backgroundTasks.delete(task));
-				}
-			}
 			for (const [chat, input] of began) void channel.#builds.state(chat, "running", input, true);
 			for (const chat of selected) void Promise.resolve().then(() => channel.#publishSelection(chat))
 				.catch(error => channel.#log("warn", "agent.selection.failed", failure(error)));
@@ -624,9 +613,9 @@ export class Channel {
 			channel.#publishBusy();
 			if (changes.some((change) => change.type === "entry")) channel.#activity();
 		});
-		if (options.onBuildPulls) {
+		if (options.onPlans) {
 			await channel.#builds.refreshReviews();
-			channel.#publishBuildPulls();
+			channel.#publishPlans();
 		}
 		if (options.relocate) {
 			await harness.commit(async (tx) => {
@@ -652,7 +641,6 @@ export class Channel {
 		channel.#feed = await options.feed?.(harness, channel.submitInput.bind(channel));
 		if (options.resume !== false) {
 			await channel.#builds.finishStops();
-			await channel.#builds.finishMergeCleanup(options.owner);
 			await channel.#builds.reconcileRuns();
 			await channel.#builds.recoverMentionEntries();
 			await channel.#placeResumingChats();
@@ -836,6 +824,11 @@ export class Channel {
 				return this.#stopChat(conversation, this.#runs.has(conversation.id)
 					? { by: request.author, at: Date.now() } : undefined);
 			}
+			case "build-merge":
+				this.#author(request.author);
+				if (room.isAgent(request.author)) throw new Error("Only a person can merge a plan.");
+				await this.#mayInvoke(request.author);
+				return this.#builds.mergePull(request);
 			case "build-stop":
 				this.#author(request.author);
 				if (room.isAgent(request.author)) throw new Error("Only a person can stop the plan's agents.");
@@ -869,11 +862,7 @@ export class Channel {
 			}
 			case "changes": {
 				const { cwd, lane } = await this.#place(request.chat);
-				const value = await changes(this.#options.env(cwd), cwd, this.#options.project, lane, context);
-				const activity = this.#options.onPullActivity;
-				if (activity) await Promise.resolve().then(() => activity({ branch: value.branch, head: value.head }))
-					.catch(error => this.#log("warn", "pull.activity.failed", failure(error)));
-				return value;
+				return changes(this.#options.env(cwd), cwd, this.#options.project, lane, context);
 			}
 			case "fetch": {
 				const { cwd, lane } = await this.#place(request.chat);
@@ -1554,17 +1543,9 @@ export class Channel {
 		return this.#harness.commit(tx => this.#modelSettings.select(tx, conversation.id, request), context);
 	}
 
-	#publishBuildPulls() {
-		try { this.#options.onBuildPulls?.(this.#builds.pulls()); }
-		catch (error) { this.#log("error", "build.pulls.failed", failure(error)); }
-	}
-
-	planPullText(build: string, branch: string) {
-		return this.#builds.pullText(build, branch);
-	}
-
-	planPullMerged(input: Parameters<Builds["pullMerged"]>[0]) {
-		return this.#builds.pullMerged(input, this.#options.owner);
+	#publishPlans() {
+		try { this.#options.onPlans?.(this.#builds.summary()); }
+		catch (error) { this.#log("error", "build.summary.failed", failure(error)); }
 	}
 
 	#canInvoke(author: string, shared: boolean): boolean {

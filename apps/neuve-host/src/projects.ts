@@ -17,11 +17,11 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 
 import * as catalog from "./catalog";
 import { config } from "./config";
-import { clone, parse, remoteRepositories, REMOTES } from "./github";
+import { clone, parse, remote, REMOTES } from "./github";
 import type { Project } from "./protocol";
 
 /** `commit` is whether lanes can start: the folder is a Git repository with a commit. */
-type Checkout = { root: string; repo?: string; repositories: string[]; commit: boolean };
+type Checkout = { root: string; repo?: string; commit: boolean };
 
 /** `status` is null when Git could not start. */
 type Git = { status: number | null; stdout: string; stderr: string };
@@ -95,8 +95,8 @@ async function probe(path: string): Promise<Checkout> {
 		git(path, REMOTES),
 	]);
 	const main = worktrees.status === 0 ? /^worktree (.+)$/m.exec(worktrees.stdout)?.[1] : undefined;
-	const repositories = remotes.status === 0 ? remoteRepositories(remotes.stdout) : [];
-	return { root: main || path, repo: repositories[0], repositories, commit: !!main && head.status === 0 };
+	const repo = remotes.status === 0 ? remote(remotes.stdout) ?? undefined : undefined;
+	return { root: main || path, repo, commit: !!main && head.status === 0 };
 }
 
 async function project(path: string): Promise<Project> {

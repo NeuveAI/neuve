@@ -16,7 +16,6 @@ import { Identity, Sessions } from "@neuve/records-core/capture";
 
 import * as catalog from "./catalog";
 import { request } from "./client";
-import { publishBuildPulls, publishPullActivity } from "./plan-pulls";
 import { browser } from "./browser";
 import { desktop, desktopAvailable } from "./desktop";
 import { images } from "./images";
@@ -29,7 +28,7 @@ import { tabs } from "./tabs";
 
 const RETIRE_AFTER = 10 * 60_000;
 /** An archived channel keeps its history as it was archived. */
-const ARCHIVED = new Set(["say", "ask", "select", "chat", "react", "delete", "edit", "plan-approve", "approval-answer"]);
+const ARCHIVED = new Set(["say", "ask", "select", "chat", "react", "delete", "edit", "plan-approve", "build-merge", "approval-answer"]);
 for (const op of ["plan-comment", "plan-comment-reply", "plan-comment-edit", "plan-comment-remove", "plan-comments-send"]) {
 	ARCHIVED.add(op);
 }
@@ -89,8 +88,7 @@ const channel = await openChannel({
 	named: record.named,
 	claim: async (name, exact) => catalog.claim(id, name, exact),
 	onMetadata: (value) => catalog.metadata(id, value),
-	onBuildPulls: (value) => publishBuildPulls(id, value),
-	onPullActivity: value => publishPullActivity(id, value),
+	onPlans: (plans) => catalog.plans(id, plans),
 	onActivity: (at) => catalog.activity(id, at),
 	onBusy: (busy) => catalog.busy(id, busy),
 	onRun: (ran) => catalog.ran(id, ran),
@@ -215,12 +213,8 @@ function serve(socket: Socket) {
 			if (admitted) admitting++;
 			let value: unknown;
 			try {
-				if (body.op === "plan-pull-text") value = await channel.planPullText(body.build, body.branch);
-				else if (body.op === "plan-pull-merged") value = await channel.planPullMerged(body);
-				else {
-					const extension = await extensionRequest(channel, body, !!catalog.read(id).archived);
-					value = extension.handled ? extension.value : await channel.handle(parseNativeChannelRequest(body), (event) => send({ id: parsedId, event }), trace);
-				}
+				const extension = await extensionRequest(channel, body, !!catalog.read(id).archived);
+				value = extension.handled ? extension.value : await channel.handle(parseNativeChannelRequest(body), (event) => send({ id: parsedId, event }), trace);
 			} finally {
 				if (admitted && !--admitting) {
 					drained.resolve();

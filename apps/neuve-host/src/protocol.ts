@@ -7,6 +7,7 @@ import type {
 	GithubKind,
 	GithubPull,
 	ModelRef,
+	PlanSummary,
 	Request,
 	RunEnd,
 } from "@ace/channel/protocol";
@@ -39,9 +40,7 @@ export type WorkerInfo = { id: string; pid: number };
 /** `freeze` drains admitted requests and exits the worker for a move, or fails if work remains. */
 /** Only this host's own processes send these; the gateway refuses them from clients. */
 export type WorkerRequest =
-	| { op: "worker" } | { op: "freeze" } | { op: "export" }
-	| { op: "plan-pull-text"; build: string; branch: string }
-	| { op: "plan-pull-merged"; build: string; branch: string; number: number; head: string; at: number };
+	| { op: "worker" } | { op: "freeze" } | { op: "export" };
 
 export type Diagnostics = {
 	tools: { name: string; path?: string; version?: string; account?: string; error?: string }[];
@@ -120,7 +119,7 @@ export type Listing = {
 	active?: number;
 	/** Live channel-wide run projection; absent on older hosts, never authoritative. */
 	busy?: boolean;
-	plans?: { ready?: boolean; humanRequired?: number; waiting?: boolean };
+	plans?: Partial<PlanSummary> & { ready?: boolean };
 	/** The latest invoked run's end; absent on older hosts and before a channel's first one. */
 	ran?: RunEnd;
 	/** The latest message a person or another channel's agent wrote; absent on older hosts. */
@@ -378,7 +377,6 @@ export type HostRequest =
 	| { op: "github-files"; repo: string; number: number }
 	| { op: "github-pull-watch"; repo: string; branch: string; subscription: string }
 	| { op: "github-pull-unwatch"; subscription: string }
-	| { op: "plan-pull-merge"; channel: string; build: string; number: number; head: string }
 	/** These settings belong to the local owner and are never forwarded to peers. */
 	/** `fresh` reads again keys whose last read waited on a prompt; polls leave it out. */
 	| { op: "settings"; fresh?: boolean }

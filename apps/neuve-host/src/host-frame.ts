@@ -7,7 +7,7 @@ const listing = z.object({
 	id: z.string(), host: z.string(), name: z.string(), prefix: z.string().optional(), owner: z.string(), project: z.string(), created: z.number(),
 	state: z.enum(["running", "dormant", "archived", "offline"]), root: z.string().optional(), repo: z.string().optional(), hosted: z.string().optional(), compute: z.literal(true).optional(), computing: z.enum(["starting", "stopping"]).optional(), stopped: z.literal(true).optional(), moving: z.string().optional(), stalled: z.boolean().optional(), summary: z.string().optional(), revision: z.int().optional(), model: ModelRefSchema.optional(),
 	active: z.number().optional(), busy: z.boolean().optional(), ran: runEnd.optional(),
-	plans: z.object({ ready: z.boolean().optional(), humanRequired: z.int().nonnegative().optional(), waiting: z.boolean().optional() }).optional(),
+	plans: z.object({ branches: z.array(z.string()).optional(), ready: z.boolean().optional(), humanRequired: z.int().nonnegative().optional(), waiting: z.boolean().optional() }).optional(),
 	said: z.object({ at: z.number(), author: z.string() }).optional(),
 	mentions: z.record(z.string(), z.number()).optional(),
 });

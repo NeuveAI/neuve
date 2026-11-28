@@ -6,12 +6,13 @@ import {
 	AgentDoc, configure, defineDoc, defineExtension, defineTool, InboxDoc, LiveDoc,
 	type ConversationId, type EntryId, type Harness, type InputSubmissionDraft, type SubmissionId, type SubmissionRecord, type TaskId, type ToolExecutionApi, type ToolExecutionResult, type Tx,
 } from "@earendil-works/pi-durable";
+import { z } from "zod";
 import type { Channel } from "./channel";
 import type { Admission } from "./extensions";
 import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
-import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, failureCaption, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type BuildReview, type Effort, type ModelRef, type WorkMessage } from "./protocol";
+import { AGENT_MESSAGE_TOOL, AGENT_START_TOOL, buildId, failureCaption, type AgentFailure, type AgentMessage, type AgentMessageArgs, type AgentRole, type AgentStartArgs, type Build, type BuildAgent, type BuildReview, type Effort, type ModelRef, type PlanSummary, type Request, type WorkMessage } from "./protocol";
 import { ReviewCardsDoc, type ReviewCard } from "./review-cards";
 import { content, draft, text as messageText } from "./room";
 
@@ -25,7 +26,11 @@ export type BuildHost = {
 		| [name: string, source?: ReviewSource | "origin"]
 		| [placement: { chat: ConversationId; recorded?: { path: string; base?: string } }]
 	): Promise<Worktree>;
-	removeWorktree?(lane: string, worktree: Worktree, head: string): Promise<boolean>;
+	pulls?: {
+		repo: string;
+		gh(args: string[], body?: string): Promise<string>;
+		git(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }>;
+	};
 	query?: {
 		sessionId: string;
 		read(input: ScopeRead): Promise<ScopeReadAnswer>;
@@ -68,8 +73,7 @@ type StoredBuild = {
 	starts: Record<string, Start>;
 	revision?: { requests: Record<string, string> };
 	stopping?: { chat: ConversationId; running: boolean }[];
-	mergeCleanup?: { head: string };
-	finishedReview?: { humanRequired: number; reviewerHeads: string[] };
+	finishedReview?: { humanRequired: number };
 };
 
 type StoredMessage = {
@@ -94,8 +98,6 @@ type MentionReply = {
 	inputs: { id: SubmissionId; requestId: string; mention: string }[];
 };
 export type BuildsState = { records: Record<string, StoredBuild>; messages: StoredMessage[]; mentions?: StoredMention[] };
-/** Local host projection of the committed build and its agents' last completed runs. */
-export type BuildPull = { build: Build; ended: number[]; finishedReview?: StoredBuild["finishedReview"] };
 export const BuildsDoc = defineDoc<BuildsState>({
 	kind: "neuve.builds",
 	version: 1,
@@ -278,12 +280,30 @@ async function approvedPlan(plans: readonly StoredPlan[] | undefined) {
 	return { file, title, hash, text: await checkedPlanText(hash, text) };
 }
 
+const Pull = z.object({
+	number: z.int().positive(), isDraft: z.boolean(), headRefOid: z.string(),
+	state: z.enum(["OPEN", "CLOSED", "MERGED"]),
+});
+const MergeSettings = z.object({
+	squashMergeAllowed: z.boolean(), mergeCommitAllowed: z.boolean(), rebaseMergeAllowed: z.boolean(),
+});
+
+async function viewPull({ gh, repo }: NonNullable<BuildHost["pulls"]>, branch: string) {
+	const output = await gh(["pr", "view", branch, "--repo", repo, "--json", "number,isDraft,headRefOid,state"])
+		.catch((error: unknown) => {
+			if (error instanceof Error && error.message.startsWith("no pull requests found for branch ")) return undefined;
+			throw error;
+		});
+	return output === undefined ? undefined : Pull.parse(JSON.parse(output));
+}
+
 function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: Start, query: boolean): string {
 	const reference = [
 		`Approved plan "${plan.title}" (${plan.hash}).`,
 		`Work on branch ${branch} in the worktree at ${path}.`,
 		"Load the Neuve skill.",
-		"Push your work with lane push. The host opens, readies and merges the plan's pull request. Do not run gh pr create, gh pr ready or gh pr merge.",
+		"Push your work with lane push. The pull request becomes ready only after the plan's reviewer approves the work and their Neuve review publishes. Do not run gh pr create, gh pr ready or gh pr merge yourself.",
+		...(start.role === "implementer" ? ["Once you push your work, use agent_start to start the plan's reviewer."] : []),
 		"If you push a new head to the plan's branch after the plan's Neuve review has published, use agent_message to ask the plan's reviewer to review the new head and request a fresh Neuve review once they approve it.",
 		...(query ? ["Ask for your scope with neuve_query using the plan's goal and done-when items as your question."] : []),
 		"",
@@ -295,7 +315,6 @@ function briefText(plan: ScopeRead["plan"], { path, branch }: Worktree, start: S
 	return [
 		...reference,
 		source ? `Review the implementer's work on branch ${source}. If asked to review a new head, review it and request a fresh Neuve review once you approve it.` : "Implement this plan.",
-		...(source ? [] : ["Use agent_start to ask the host for a reviewer or another implementer."]),
 		"Use agent_message to message another agent of this plan.",
 	].join("\n");
 }
@@ -363,17 +382,19 @@ export class Builds {
 
 	agent(chat: number) { return this.#agents.get(chat); }
 
-	pulls(): BuildPull[] {
-		return Object.values(this.#document?.records ?? {}).map(({ build, starts, finishedReview }) => ({
-			build, ended: Object.values(starts).map(start => start.lastRun ?? 0), finishedReview,
-		}));
-	}
-
-	async pullText(id: string, branch: string): Promise<string> {
-		const build = this.#document?.records[id]?.build;
-		if (build?.branch !== branch || build.merged) throw new Error("This plan's branch is no longer open.");
-		const plans = (await this.harness.snapshot(PlansDoc, context))?.chats[build.chat];
-		return checkedPlanText(build.plan.hash, findPlan(plans, build.plan.id).text);
+	summary(): PlanSummary | undefined {
+		const branches: string[] = [];
+		let humanRequired = 0;
+		let waiting = false;
+		for (const { build, finishedReview } of Object.values(this.#document?.records ?? {})) {
+			if (build.merged || build.state.kind === "stopped") continue;
+			if (build.branch) branches.push(build.branch);
+			humanRequired += finishedReview?.humanRequired ?? build.review?.humanRequired ?? 0;
+			waiting ||= build.agents.some(agent => agent.state === "waiting");
+		}
+		if (branches.length || humanRequired || waiting) {
+			return { branches, ...(humanRequired ? { humanRequired } : {}), ...(waiting ? { waiting } : {}) };
+		}
 	}
 
 	async refreshReviews(chats?: readonly number[]) {
@@ -389,20 +410,17 @@ export class Builds {
 				build.branch ??= starts[firstImplementer]?.worktree?.branch;
 				let latest: { chat: number; card: Extract<ReviewCard, { kind: "review" }> } | undefined;
 				let finished: Extract<ReviewCard, { kind: "review" }> | undefined;
-				const reviewerHeads = new Set<string>();
-				for (const { chat, role } of build.agents) {
+				for (const { chat } of build.agents) {
 					for (const card of Object.values((await tx.doc(ReviewCardsDoc, chat as ConversationId)).cards)) {
 						if (card.kind !== "review") continue;
 						if (!latest || card.updatedAt > latest.card.updatedAt) latest = { chat, card };
 						if (card.phase !== "finished") continue;
 						// Review IDs are time-ordered. Old cards can be updated when the branch moves.
 						if (!finished || card.review > finished.review) finished = card;
-						if (role === "reviewer") reviewerHeads.add(card.range.head);
 					}
 				}
 				const finishedReview = finished && {
 					humanRequired: finished.finished?.byReviewLane.humanRequired ?? 0,
-					reviewerHeads: [...reviewerHeads].sort(),
 				};
 				if (JSON.stringify(record.finishedReview) !== JSON.stringify(finishedReview)) {
 					if (finishedReview) record.finishedReview = finishedReview;
@@ -418,56 +436,137 @@ export class Builds {
 				if (JSON.stringify(build.review) !== JSON.stringify(review)) build.review = review;
 			}
 		}, context));
+		const reviewers = new Set(chats?.flatMap(chat => {
+			const agent = this.agent(chat);
+			return agent?.role === "reviewer" ? [agent.build] : [];
+		}));
+		await Promise.all([...reviewers].map(id => this.#syncPull(id, false)));
 	}
 
-	async pullMerged(input: { build: string; branch: string; number: number; head: string; at: number }, owner: string) {
+	async #syncPull(id: string, ended: boolean) {
 		const host = this.options.host;
-		if (!host) throw new Error("This channel's work lanes are unavailable.");
-		await this.#track(host.share(`neuve.build:${input.build}:merged`, async () => {
-			const lanes = await this.harness.commit(async tx => {
-				const record = (await tx.doc(BuildsDoc)).records[input.build];
-				if (record?.build.branch !== input.branch) throw new Error("This pull request belongs to a different plan branch.");
-				const { build } = record;
-				if (build.merged && build.merged.number !== input.number) throw new Error("This plan has already merged a different pull request.");
-				if (!build.merged) {
-					build.merged = { number: input.number, at: input.at };
-					record.mergeCleanup = { head: input.head };
+		const commands = host?.pulls;
+		const build = this.#document?.records[id]?.build;
+		if (!host || !commands || !build?.branch || build.merged || this.#closing) return;
+		const { repo, gh, git } = commands;
+		const { branch } = build;
+		await this.#track(this.options.admit(build.chat, async () => {
+			const current = (await this.harness.snapshot(BuildsDoc, context))?.records[id]?.build;
+			if (!current || current.merged) return;
+			if (!ended && !await this.#reviewedHead(current)) return;
+			let pull = await viewPull(commands, branch);
+			if (!pull && ended) {
+				const ref = `refs/heads/${branch}`;
+				const { status, stdout, stderr } = await git(["ls-remote", "--symref", "origin", "HEAD", ref]);
+				if (status !== 0) throw new Error(stderr.trim() || "Could not read origin.");
+				const head = stdout.split("\n").find(line => line.endsWith(`\t${ref}`))?.split("\t")[0];
+				if (!head) return;
+				const base = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(stdout)?.[1];
+				if (!base) throw new Error("Origin advertises no default branch.");
+				const plans = (await this.harness.snapshot(PlansDoc, context))?.chats[current.chat];
+				const plan = findPlan(plans, current.plan.id);
+				const body = await checkedPlanText(current.plan.hash, plan.text);
+				await gh(["pr", "create", "--draft", "--repo", repo, "--head", branch, "--base", base,
+					"--title", current.plan.title, "--body-file", "-"], body);
+				pull = await viewPull(commands, branch);
+				this.log("info", "pull.draft.opened", { repo, branch, number: pull?.number, head: pull?.headRefOid ?? head });
+			}
+			if (pull?.state !== "OPEN") return;
+			const { number, headRefOid: head, isDraft } = pull;
+			const reviewedHead = await this.#reviewedHead(current);
+			const fields = { repo, branch, number, head };
+			if (isDraft && head === reviewedHead) {
+				await gh(["pr", "ready", String(number), "--repo", repo]);
+				this.log("info", "pull.ready", fields);
+			} else if (ended && !isDraft && head !== reviewedHead) {
+				await gh(["pr", "ready", String(number), "--undo", "--repo", repo]);
+				this.log("info", "pull.review.stale", { ...fields, reviewedHead });
+			}
+		}).catch(error => this.log("warn", "pull.sync.failed", { repo, branch, ...failure(error) })));
+	}
+
+	async #reviewedHead(build: Build): Promise<string | undefined> {
+		let newest: Extract<ReviewCard, { kind: "review" }> | undefined;
+		for (const { chat, role } of build.agents) {
+			if (role !== "reviewer") continue;
+			const reviews = await this.harness.snapshot(ReviewCardsDoc, chat as ConversationId, context);
+			for (const card of Object.values(reviews?.cards ?? {})) {
+				if (card.kind === "review" && card.phase === "finished" && (!newest || card.review > newest.review)) newest = card;
+			}
+		}
+		return newest?.range.head;
+	}
+
+	async mergePull({ build: id, number, head, author }: Extract<Request, { op: "build-merge" }>) {
+		const host = this.options.host;
+		const commands = host?.pulls;
+		const build = this.#document?.records[id]?.build;
+		if (!host || !commands || !build?.branch) throw new Error("This plan has no GitHub pull request.");
+		const { repo, gh, git } = commands;
+		const { branch } = build;
+		await this.#track(host.share(JSON.stringify(["build:merge", id, number, head]), async () => {
+			const merged = await this.options.admit(build.chat, async () => {
+				const saved = (await this.harness.snapshot(BuildsDoc, context))?.records[id]?.build;
+				if (saved?.merged?.number === number) return;
+				const pull = await viewPull(commands, branch);
+				if (!pull || pull.number !== number || saved?.merged) throw new Error("This pull request belongs to a different plan.");
+				const fields = { repo, branch, number, head };
+				try {
+					if (pull.state !== "MERGED") {
+						const settings = MergeSettings.parse(JSON.parse(await gh(["repo", "view", repo, "--json",
+							"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"])));
+						const method = settings.squashMergeAllowed ? "--squash" : settings.mergeCommitAllowed ? "--merge"
+							: settings.rebaseMergeAllowed ? "--rebase" : undefined;
+						if (!method) throw new Error("The repository has no enabled merge method.");
+						await gh(["pr", "merge", String(number), "--repo", repo, "--match-head-commit", head, "--delete-branch", method]);
+						const merged = await viewPull(commands, String(number));
+						if (merged?.state !== "MERGED" || merged.number !== number || merged.headRefOid !== head) {
+							throw new Error("GitHub has not confirmed the pull request merged at this head.");
+						}
+					} else if (pull.headRefOid !== head) {
+						throw new Error("GitHub merged a different head.");
+					}
+				} catch (error) {
+					this.log("warn", "pull.merge.failed", { ...fields, ...failure(error) });
+					throw error;
 				}
-				if (record.mergeCleanup?.head !== input.head) return [];
-				for (const agent of build.agents) {
-					agent.state = "done";
-					delete agent.failure;
-				}
-				return Object.values(record.starts).map(({ lane, worktree, brief }) => ({
-					lane, worktree: worktree && { ...worktree }, chat: brief?.chat,
-				}));
-			}, context);
+				const at = Date.now();
+				const lanes = await this.harness.commit(async tx => {
+					const { build, starts } = (await tx.doc(BuildsDoc)).records[id]!;
+					build.merged = { number, at };
+					for (const agent of build.agents) {
+						agent.state = "done";
+						delete agent.failure;
+					}
+					return Object.values(starts).map(({ lane, worktree, brief }) => ({
+						lane, worktree: worktree && { ...worktree }, chat: brief?.chat,
+					}));
+				}, context);
+				this.log("info", "pull.merged", fields);
+				return { at, lanes };
+			});
+			if (!merged) return;
+			const { at, lanes } = merged;
 			for (const { chat } of lanes) {
-				if (chat !== undefined) {
-					await this.options.admit(chat, async () => {});
-					await this.options.stop(chat, owner, input.at);
-				}
+				if (chat === undefined) continue;
+				await this.options.admit(chat, () => this.options.stop(chat, author, at));
 			}
 			for (const { lane, worktree, chat } of lanes) {
-				if (!worktree || !await host.removeWorktree?.(lane, worktree, input.head)) continue;
+				if (!worktree) continue;
+				const { path, branch } = worktree;
+				const removed = await git(["worktree", "remove", "--", path]);
+				const result = removed.status === 0 ? await git(["update-ref", "-d", `refs/heads/${branch}`, head]) : removed;
+				if (result.status !== 0) {
+					this.log("warn", "build.lane.kept", { branch, path, reason: result.stderr.trim() || "Git did not complete the lane cleanup." });
+					continue;
+				}
 				await this.harness.commit(async tx => {
-					const lanes = (await tx.doc(LanesDoc)).lanes;
+					const { lanes } = await tx.doc(LanesDoc);
 					if (lanes[lane]?.chat === chat) delete lanes[lane];
 				}, context);
+				this.log("info", "build.lane.removed", { branch, path });
 			}
-			await this.harness.commit(async tx => {
-				const record = (await tx.doc(BuildsDoc)).records[input.build];
-				if (record?.mergeCleanup?.head === input.head) delete record.mergeCleanup;
-			}, context);
 		}));
-	}
-
-	async finishMergeCleanup(owner: string) {
-		for (const { build, mergeCleanup } of Object.values(this.#document?.records ?? {})) {
-			if (!build.branch || !build.merged || !mergeCleanup) continue;
-			await this.pullMerged({ build: build.id, branch: build.branch, head: mergeCleanup.head, ...build.merged }, owner)
-				.catch(error => this.log("warn", "build.merge.cleanup.failed", { build: build.id, ...failure(error) }));
-		}
 	}
 
 	async findAgent(tx: Tx, from: ConversationId, role: AgentRole, part?: string) {
@@ -725,6 +824,7 @@ export class Builds {
 			})());
 		})().catch(error => this.log("error", "build.agent.end.failed", { build: member.build, chat, ...failure(error) }));
 		await this.#track(recordEnd);
+		await this.#syncPull(member.build, true);
 	}
 
 	async reconcileRuns(): Promise<void> {

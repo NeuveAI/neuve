@@ -139,6 +139,10 @@ export const RequestSchema = z.discriminatedUnion("op", [
 	z.strictObject({ op: z.literal("stop"), chat, author }),
 	z.strictObject({ op: z.literal("kill"), author }),
 	z.strictObject({ op: z.literal("build-stop"), author, build: z.string().regex(/^\d+:[a-f0-9]{64}$/) }),
+	z.strictObject({
+		op: z.literal("build-merge"), author, build: z.string().regex(/^\d+:[a-f0-9]{64}$/),
+		number: z.int().positive(), head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/),
+	}),
 	z.strictObject({ op: z.literal("desktop"), author, enabled: z.boolean() }),
 	z.strictObject({ op: z.literal("share"), author, shared: z.boolean() }),
 	z.strictObject({ op: z.literal("rename"), author, name: z.string() }),
