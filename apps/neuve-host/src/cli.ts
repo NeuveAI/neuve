@@ -184,7 +184,7 @@ function clip(text: string, length: number): string {
 }
 
 /** Whether `(run ended)` already printed, so `ask` doesn't print a second ending. */
-let ended = false;
+let runEnded = false;
 /** Whether a reply failed or was stopped, so `ask` exits 1 for a script. */
 let unanswered = false;
 
@@ -243,7 +243,7 @@ function render(event: Event, info: ChannelInfo) {
 			return;
 		case "run":
 			if (event.state !== "end") return;
-			ended = true;
+			runEnded = true;
 			return console.log(dim(`${tag}  (run ended)`));
 	}
 }
@@ -272,7 +272,7 @@ async function watch(session: Session, replay = true) {
 	return {
 		ended: closed.promise,
 		waitForRunEnd() {
-			if (ended && !runOpen) return;
+			if (runEnded && !runOpen) return;
 			runEnd = Promise.withResolvers<void>();
 			return Promise.race([runEnd.promise, closed.promise]);
 		},
@@ -751,7 +751,7 @@ async function main() {
 					});
 					const status = await session.request<string>({ op: "wait", submission });
 					await watching.waitForRunEnd();
-					if (status === "unanswered" && !ended) console.log(dim("  (stopped before answering)"));
+					if (status === "unanswered" && !runEnded) console.log(dim("  (stopped before answering)"));
 					if (status === "unanswered" || unanswered) process.exit(1);
 					return;
 				}
