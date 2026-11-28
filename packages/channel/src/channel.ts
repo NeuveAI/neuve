@@ -525,6 +525,7 @@ export class Channel {
 		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
 		channel.#builds.observe(await harness.snapshot(BuildsDoc, context));
 		await channel.#restoreRunsAndHandoffs(handoffs);
+		let opened = false;
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
 			const unannouncedEntries = new Set<EntryId>();
@@ -612,12 +613,9 @@ export class Channel {
 					channel.#caption(scope.conversationId);
 				}
 			}
-			if (changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
-				&& !(change.value as LiveState | null)?.run)
-				&& !channel.#closing.signal.aborted) {
-				const task = channel.#reconcilePlanModes().catch(error => channel.#log("error", "plan.mode.reconcile", failure(error)));
-				channel.#backgroundTasks.add(task);
-				void task.finally(() => channel.#backgroundTasks.delete(task));
+			if (opened && changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
+				&& !(change.value as LiveState | null)?.run)) {
+				channel.#schedulePlanReconcile();
 			}
 			if (runEnded) void channel.#builds.replyToMentions();
 			// Ending a run settles its inputs in the same commit, in no particular change order.
@@ -654,7 +652,7 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
-		await channel.#reconcilePlanModes();
+		await channel.#reconcilePlanModes("open");
 		const prepareModels = options.resume !== false && options.prepareModels;
 		const deferred = prepareModels && await channel.#hasRecoverableWork();
 		const feed = Promise.resolve().then(async () => {
@@ -678,6 +676,8 @@ export class Channel {
 		await feed;
 		if (options.resume !== false && !deferred) await channel.#resumeWork();
 		log("info", "channel.open", { name: value.name, project: options.project });
+		opened = true;
+		channel.#schedulePlanReconcile();
 		return channel;
 		} catch (error) {
 			const errors: unknown[] = [error];
@@ -1161,12 +1161,20 @@ export class Channel {
 				}
 				if (planEntry === undefined) return;
 				// The Plan mode input resumes the person's prior request in a separate run.
+				const mentionsByChat = new Map<ConversationId, Set<EntryId>>();
 				let cursor: Cursor | undefined;
 				do {
-					const page = await tx.scanEntries({ conversationId: chat, maxEntryId: planEntry }, 32, cursor);
+					const page = await tx.scanEntries({ conversationId: chat, maxEntryId: (planEntry - 1) as EntryId }, 32, cursor);
 					for (const entry of page.items) {
 						const human = room.human(entry);
-						if (human?.invoked && human.author !== "unknown" && !room.isAgent(human.author)) return { author: human.author };
+						if (!human?.invoked || room.isAgent(human.author)) continue;
+						const source = entry.conversationId;
+						if (this.#builds.agent(source)) {
+							const mentions = mentionsByChat.get(source) ?? await this.#mentionInputEntries(source);
+							mentionsByChat.set(source, mentions);
+							if (mentions.has(entry.id)) continue;
+						}
+						return { author: human.author };
 					}
 					cursor = page.next;
 				} while (cursor !== undefined);
@@ -1181,6 +1189,19 @@ export class Channel {
 		} catch (error) {
 			this.#log("warn", "run.publish", failure(error));
 		}
+	}
+
+	async #mentionInputEntries(chat: ConversationId) {
+		const entries = new Set<EntryId>();
+		let cursor: Cursor | undefined;
+		do {
+			const page = await this.#options.storage.scanSubmissions({ conversationId: chat }, 256, cursor, context);
+			for (const submission of page.items) {
+				if (isMentionSubmission(submission) && submission.entry !== undefined) entries.add(submission.entry);
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		return entries;
 	}
 
 	/** Durably abort every chat's work, including background subagents, so reopening resumes none of it. */
@@ -1732,7 +1753,16 @@ export class Channel {
 		return submission;
 	}
 
-	async #reconcilePlanModes() {
+	#schedulePlanReconcile() {
+		if (this.#options.resume === false || this.#closing.signal.aborted) return;
+		const task = Promise.resolve(this.#resuming).then(() => this.#reconcilePlanModes("background"))
+			.catch(error => this.#log("error", "plan.mode.reconcile", failure(error)));
+		this.#backgroundTasks.add(task);
+		void task.finally(() => this.#backgroundTasks.delete(task));
+	}
+
+	async #reconcilePlanModes(phase: "open" | "background") {
+		if (this.#closing.signal.aborted) return;
 		const { exits, entries } = await this.#harness.commit(async tx => {
 			const doc = await tx.doc(ChatModesDoc);
 			const exits: ModeTransition[] = [];
@@ -1742,38 +1772,38 @@ export class Channel {
 			}
 			return { exits, entries: Object.keys(doc.pendingEntries ?? {}) };
 		}, context);
-		for (const transition of exits) await this.#planExited(transition);
+		for (const transition of exits) await this.#planExited(transition, phase === "background");
 		for (const id of entries) {
 			const chat = Number(id) as ConversationId;
 			const conversation = await this.#harness.conversation(chat, context);
 			if (!conversation) continue;
-			await this.#admitted(chat, async () => {
+			const reconcile = async () => {
 				if (this.#closing.signal.aborted) return;
 				const transition = await this.#harness.commit(tx => reconcilePlanEntry(tx, chat), context);
 				if (!transition) return;
 				const { requestId, mode } = transition;
 				if (mode) {
-					await this.#publishSelection(chat, mode);
+					if (phase === "background") await this.#publishSelection(chat, mode);
 					this.#log("info", "plan.mode.entered", { chat, previousChatMode: "ace", chatMode: mode });
 				}
-				const submitted = await this.#harness.commit(tx => tx.submissionByRequest(chat, requestId), context);
-				if (!submitted) {
-					await this.#submitInput(conversation, {
-						type: "input", whenBusy: "followUp", requestId,
-						content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
-					}, context);
-				}
+				if (phase === "open") return;
+				await this.#submitInput(conversation, {
+					type: "input", whenBusy: "followUp", requestId,
+					content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
+				}, context);
 				await this.#harness.commit(async tx => {
 					const pending = (await tx.doc(ChatModesDoc)).pendingEntries;
 					if (pending?.[chat] === requestId) delete pending[chat];
 				}, context);
-			});
+			};
+			if (phase === "open") await reconcile();
+			else await this.#admitted(chat, reconcile);
 		}
 	}
 
-	async #planExited({ chat, previous, mode, approval }: ModeTransition) {
+	async #planExited({ chat, previous, mode, approval }: ModeTransition, publish = true) {
 		this.#log("info", "plan.mode.exited", { chat, previousChatMode: previous, chatMode: mode, approvedPlanId: approval.plan });
-		await this.#publishSelection(chat, mode);
+		if (publish) await this.#publishSelection(chat, mode);
 	}
 
 	async #publishSelection(chat: ConversationId, mode?: ChatMode) {
@@ -2113,9 +2143,7 @@ export class Channel {
 			for (const change of changes) {
 				if (change.type !== "document") continue;
 				const { kind, scope } = change.record;
-				if (kind === ChatModesDoc.definition.kind) {
-					for (const chat of observedChats) chats.add(chat);
-				} else if (kind === ReviewFeedDefinition.kind && scope.kind === "conversation" && observedChats.has(scope.conversationId)) {
+				if (kind === ReviewFeedDefinition.kind && scope.kind === "conversation" && observedChats.has(scope.conversationId)) {
 					chats.add(scope.conversationId);
 				}
 			}

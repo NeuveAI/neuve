@@ -332,10 +332,13 @@ test.each(["live", "replayed", "published"] as const)("Plan mode entry keeps the
 
 test("reopening retries a Plan mode input whose submission was interrupted", async () => {
 	let interrupt = false;
+	let preparations = 0;
+	const interruption = "Interrupted before submitting the Plan mode input";
 	const fixture = await Fixture.create({
 		planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes },
 		prepareModels: async () => {
-			if (interrupt) throw new Error("Interrupted before submitting the Plan mode input");
+			preparations++;
+			if (interrupt) throw new Error(interruption);
 		},
 	});
 	try {
@@ -345,8 +348,23 @@ test("reopening retries a Plan mode input whose submission was interrupted", asy
 		});
 		await fixture.request({ op: "ask", author: OWNER, text: "Make a plan" });
 		await until(() => fixture.log.find(entry => entry.event === "plan.mode.reconcile"), 15_000, "the interrupted input");
+		const restartLog = fixture.log.length;
+		await fixture.restart();
+		expect(await fixture.request<ChannelInfo>({ op: "info" })).toMatchObject({ chats: [{ mode: "plan", busy: false }] });
+		const failure = await until(() => fixture.log.slice(restartLog).find(entry => entry.event === "plan.mode.reconcile"));
+		expect(failure).toMatchObject({ level: "error", fields: { error: interruption } });
+
 		interrupt = false;
 		fixture.script(fauxAssistantMessage("Planning after reopening"));
+		const beforeAdministration = preparations;
+		fixture.options.resume = false;
+		await fixture.restart();
+		expect(await fixture.request<ChannelInfo>({ op: "info" })).toMatchObject({ chats: [{ mode: "plan", busy: false }] });
+		await fixture.channel.close();
+		expect(preparations).toBe(beforeAdministration);
+		expect(fixture.faux.state.callCount).toBe(1);
+
+		fixture.options.resume = true;
 		await fixture.restart();
 		const watch = await fixture.watch();
 		await watch.until("reply", event => event.text === "Planning after reopening", 2_000);
