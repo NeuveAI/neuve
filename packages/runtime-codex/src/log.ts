@@ -30,7 +30,7 @@ const scrub = (value: unknown): unknown =>
         ? value.replace(SYSTEM, "(<system>)")
         : value;
 
-const WHOLE = new Set(["config/read", "skills/list"]);
+const WHOLE = new Set(["config/read", "skills/list", "plugin/reconcile"]);
 const DELTA = /\/(delta|outputDelta|summaryTextDelta|textDelta)$/;
 
 /**
