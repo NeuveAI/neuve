@@ -13,8 +13,9 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import * as catalog from "./catalog";
 import { config } from "./config";
@@ -60,6 +61,28 @@ export async function git(dir: string, args: GitCommand, config?: readonly strin
 		if (next) next();
 		else running--;
 	}
+}
+
+export async function workLanes(project: string, folder: string) {
+	const parent = await realpath(folder).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") throw error;
+	});
+	if (parent === undefined) return [];
+	const listed = await git(project, ["worktree", "list", "--porcelain", "-z"]);
+	if (listed.status !== 0) throw new Error(listed.stderr.trim() || "Could not read Git worktrees");
+	return listed.stdout.split("\0\0").flatMap(block => {
+		const [worktree, ...fields] = block.split("\0");
+		if (!worktree?.startsWith("worktree ")) return [];
+		const path = worktree.slice("worktree ".length);
+		if (dirname(path) !== parent) return [];
+		const name = basename(path);
+		return [{
+			name,
+			path: join(folder, name),
+			head: fields.find(field => field.startsWith("HEAD "))?.slice("HEAD ".length),
+			branch: fields.find(field => field.startsWith("branch refs/heads/"))?.slice("branch refs/heads/".length),
+		}];
+	});
 }
 
 /**

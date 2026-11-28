@@ -37,7 +37,7 @@ The native extension binding installs before harness open/recovery and attaches 
 | `packages/channel/src/protocol.ts` | Unknown pricing omits optional Usage.cost rather than representing an unknown price as zero. Preserve optional metadata.shared and desktop/watch compatibility. Tool-result images name only their media type. Add the read-only tool image request by chat, call and index. | `@@ -15,7 +15,7 @@`<br>Against the channel-switch base<br>`@@ -702,0 +703 @@`<br>`@@ -822 +823,2 @@` |
 | `packages/channel/src/questions.ts` | Shares message dismissal and the waiting mark with runtime approvals. | Changed |
 | `packages/channel/src/queue.ts` | Pinned upstream bytes retained. | Byte-identical |
-| `packages/channel/src/room.ts` | Pinned upstream bytes retained. | Byte-identical |
+| `packages/channel/src/room.ts` | Describes work lanes as Git worktrees and tells agents to push with `git push -u origin <branch>`. Keeps staging limited to known paths. | Work lane instructions in the room prompt |
 | `packages/channel/src/seed.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/tabs.ts` | Pinned upstream bytes retained. | Byte-identical |
 | `packages/channel/src/transfer.ts` | Pinned upstream bytes retained. | Byte-identical |
@@ -140,7 +140,7 @@ The channel dispatches comment requests through the same chat admission queue as
 | --- | --- |
 | `packages/channel/src/channel.ts` | Supplies model metadata and the last reported context use to the environment section. Logs committed compactions with the chat and reason. |
 
-Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the two changes.ts hunks.
+Actual focused evidence uses native pi 1.0.0, real SQLite/Git, local HTTP/WebSockets and faux provider calls. Full snapshot/seed separation, complete ingress schemas, request retry, startup/close, physical-home/source ownership and native review admission have focused tests. The existing real-Git filename regression tests substantiate the filename parsing fixes in changes.ts.
 
 The coordinator runs the full composed check and isolated browser/CLI journeys at the frozen product hashes. Team membership, cloud deploy/compute, real keychain/provider authentication and remote transfers are not established by these tests. External independent review remains owner-operated; implementation completion and passing tests do not grant approval.
 

@@ -53,7 +53,7 @@ The root is the Bun workspace and orchestration boundary. The adopted `@ace/*` p
 | --- | --- |
 | [`apps/app`](apps/app/UPSTREAM.md) | Ace's coding app in the browser |
 | [`apps/neuve-host`](apps/neuve-host/UPSTREAM.md) | Ace's host and channel workers |
-| [`packages/channel`](packages/channel/UPSTREAM.md) | Ace's channel context, tools, threads, plans and work lanes |
+| [`packages/channel`](packages/channel/UPSTREAM.md) | Ace's channel context, tools, threads, plans and work lanes, made and found by the [work lanes record](architecture/decisions/0018-work-lanes.md) |
 | [`packages/ui`](packages/ui/NOTICE.md) | Ace's shared UI components |
 | [`packages/split-tabs`](packages/split-tabs/NOTICE) | Ace's split-tab layout |
 | [`apps/desktop`](apps/desktop/UPSTREAM.md) | Ace's desktop app source, kept unbuilt on this host |

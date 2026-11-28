@@ -10,7 +10,7 @@ import * as catalog from "../src/catalog";
 import { assign } from "../src/channel-create";
 import { unready } from "../src/compute";
 import { configure, bindConfiguredCatalog } from "../src/host-config";
-import { archive } from "../src/manage";
+import { archive, remove } from "../src/manage";
 import { open as openLog } from "../src/log";
 import { GatewayClient } from "../src/private-gateway-client";
 import { nativeHandoff } from "../src/review";
@@ -83,9 +83,11 @@ test("review, compute and archive never run a nested repository's settings", asy
 	await rm(join(lane.path, "loose"), { recursive: true });
 	const reviewed = await review().catch((error: Error) => error.message);
 
-	const cloud = join(record.project, ".lane", "trees", record.prefix, "cloud");
+	const cloud = join(catalog.paths(record.id).lanes, "cloud");
 	git(record.project, "worktree", "add", "-qb", `${record.prefix}/cloud`, cloud, lane.base);
 	git(record.project, "remote", "add", "origin", record.project);
+	git(lane.path, "push", "-u", "origin", lane.branch);
+	git(cloud, "push", "-u", "origin", `${record.prefix}/cloud`);
 	await mkdir(join(root, "cloud"));
 	const cloudPlant = await plantNested(cloud, join(root, "cloud"));
 	await rm(join(cloud, "loose"), { recursive: true });
@@ -98,6 +100,59 @@ test("review, compute and archive never run a nested repository's settings", asy
 	expect(reviewed).toMatchObject({ head, base: lane.base, cwd: lane.path });
 	expect(moving).toEqual([]);
 	expect(archived).toBe(true);
+});
+
+test("a cloud move reports an unpushed work lane in the channel's lanes folder", async () => {
+	const { record, project, root } = await local();
+	const origin = join(root, "origin.git");
+	git(root, "init", "--bare", origin);
+	git(project, "remote", "add", "origin", origin);
+	const name = "release-fix";
+	const branch = `${record.prefix}/${name}`;
+	const path = join(catalog.paths(record.id).lanes, name);
+	git(project, "worktree", "add", "-b", branch, path, "HEAD");
+	git(path, "push", "-u", "origin", branch);
+	git(path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "lane work");
+
+	expect(await unready(record)).toEqual([{ name, path, branch, problem: "not pushed" }]);
+});
+
+test("delete removes clean lanes and keeps dirty work and all branches", async () => {
+	const { record, home, project } = await local();
+	{
+		const clean = owned(record);
+		const folder = catalog.paths(record.id).lanes;
+		const explicitPath = join(folder, "build-example");
+		const explicitBranch = `${record.prefix}/build-example`;
+		git(project, "worktree", "add", "-b", explicitBranch, explicitPath, "HEAD");
+		const dirtyPath = join(folder, "release-fix");
+		const dirtyBranch = `${record.prefix}/release-fix`;
+		git(project, "worktree", "add", "-b", dirtyBranch, dirtyPath, "HEAD");
+		git(project, "config", "status.showUntrackedFiles", "no");
+		const draft = join(dirtyPath, "draft.txt");
+		await writeFile(draft, "uncommitted work");
+
+		await remove(record.id);
+
+		expect(catalog.owns(record.id)).toBe(false);
+		expect(existsSync(clean.path)).toBe(false);
+		expect(existsSync(explicitPath)).toBe(false);
+		const worktrees = git(project, "worktree", "list", "--porcelain");
+		expect(worktrees).not.toContain(`worktree ${clean.path}`);
+		expect(worktrees).not.toContain(`worktree ${explicitPath}`);
+		expect(worktrees).toContain(`worktree ${dirtyPath}`);
+		expect(await readFile(draft, "utf8")).toBe("uncommitted work");
+		for (const branch of [clean.branch, explicitBranch, dirtyBranch]) {
+			expect(git(project, "rev-parse", `refs/heads/${branch}`)).toBe(clean.base);
+		}
+		const logs = (await readFile(join(home, "logs/host.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+		expect(logs).toContainEqual(expect.objectContaining({
+			event: "chat.lane.retained",
+			channel: record.id,
+			path: dirtyPath,
+			error: expect.stringContaining("untracked"),
+		}));
+	}
 });
 
 for (const reason of ["dirty", "locked", "changed registration"] as const) test(`archive honestly retains ${reason} lanes with a warning`, async () => {

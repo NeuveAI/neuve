@@ -459,7 +459,7 @@ describe("inherited Git state", () => {
 });
 
 describe("retained lane names", () => {
-	test("a deleted channel's name returns with new lane branches; its lanes and branches stay as they were", async () => {
+	test("a deleted channel's name returns with new branches while dirty work and old branches survive", async () => {
 		const at = await setup([
 			{ tool: "lane", args: { action: "start", name: "feature" }, id: "call-lane" },
 			{ text: "started" },
@@ -492,7 +492,7 @@ describe("retained lane names", () => {
 		expect(await git(at.project, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/demo/")).toBe(heads);
 		expect(await git(kept, "status", "--porcelain")).toBe("?? draft.txt");
 		expect(await readFile(join(kept, "draft.txt"), "utf8")).toBe("uncommitted\n");
-		expect(await git(old, "rev-parse", "--abbrev-ref", "HEAD")).toBe("demo/feature");
+		await expect(readdir(old)).rejects.toMatchObject({ code: "ENOENT" });
 
 		await client.request({ op: "delete", channel: second.id });
 		const third = await createLane(client, { op: "create", project: at.project, name: "demo" });

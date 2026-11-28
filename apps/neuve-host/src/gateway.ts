@@ -937,7 +937,7 @@ async function handle(
 			moves.add(request.channel);
 			try {
 				// A move to a cloud workspace ends by starting it, which the app must wait out like Run in
-				// cloud before it opens the chat; the agent's lane push before it stays watchable.
+				// cloud before it opens the chat. The agent's run to push the branches stays watchable.
 				await move(
 					request.channel,
 					request.target,

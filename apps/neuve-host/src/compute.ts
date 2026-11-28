@@ -3,8 +3,6 @@
  * service (services/compute) instead of this host. Its record keeps `hosted`, so clients reach
  * the channel at the service's `/channels/:id` like any hosted channel.
  */
-import { realpathSync } from "node:fs";
-
 import type { GitCommand } from "@ace/channel/git";
 import type { ModelRef } from "@ace/channel/protocol";
 
@@ -14,7 +12,7 @@ import { project as repoOf } from "./github";
 import { refusal } from "./http";
 import { project } from "./manage";
 import { compute } from "./preferences";
-import { git } from "./projects";
+import { git, workLanes } from "./projects";
 
 /** Startup clones the repository; the service gives its own container 120 seconds to boot. */
 const CONNECT_WAIT = 5 * 60_000;
@@ -53,7 +51,7 @@ export async function available(root: string): Promise<boolean> {
 	return enabled && !!url && !!(await repoOf(root));
 }
 
-type Lane = { path: string; branch: string; base?: string };
+type Lane = { path: string; branch: string };
 
 /** A lane a cloud workspace can't check out yet, and why. */
 export type Unready = { name: string; path: string; branch?: string; problem: string };
@@ -71,22 +69,9 @@ async function output(dir: string, args: GitCommand): Promise<string> {
 }
 
 /** A cloud workspace starts from a fresh clone, so lanes travel only as pushed branches. */
-async function lanes(root: string, prefix: string): Promise<{ ready: Lane[]; unready: Unready[] }> {
-	// Git lists real paths; the channel's records name lanes under its project path.
-	const trees = `${realpathSync(root)}/.lane/trees/${prefix}/`;
-	const found = (await output(root, ["worktree", "list", "--porcelain"])).split("\n\n").flatMap(
-		(block) => {
-			const path = /^worktree (.+)$/m.exec(block)?.[1];
-			if (!path?.startsWith(trees)) return [];
-			const name = path.slice(trees.length);
-			return [{
-				path: `${root}/.lane/trees/${prefix}/${name}`,
-				name,
-				head: /^HEAD (\w+)$/m.exec(block)?.[1],
-				branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1],
-			}];
-		},
-	);
+async function lanes(record: catalog.Listing): Promise<{ ready: Lane[]; unready: Unready[] }> {
+	const { project: root, prefix, id } = record;
+	const found = await workLanes(root, catalog.paths(id).lanes);
 	if (!found.length) return { ready: [], unready: [] };
 	const pushed = new Map(
 		(await output(root, ["ls-remote", "origin", `refs/heads/${prefix}/*`])).split("\n")
@@ -105,25 +90,21 @@ async function lanes(root: string, prefix: string): Promise<{ ready: Lane[]; unr
 			blocked("no branch");
 			continue;
 		}
-		// lane clones the project's ignored files, such as node_modules, into worktrees whose branch may
-		// not ignore them, so untracked files can't block a move; they stay on this host.
+		// Untracked files stay on this host.
 		const changed = (await output(path, ["diff", "--name-only", "HEAD"])).split("\n")
 			.filter(Boolean);
 		if (changed.length) {
 			const more = changed.length > 3 ? `, and ${changed.length - 3} more` : "";
 			blocked(`uncommitted changes to ${changed.slice(0, 3).join(", ")}${more}`);
 		} else if (pushed.get(branch) !== head) blocked("not pushed");
-		else {
-			const base = (await git(root, ["config", "--get", `lane.${branch}.base`])).stdout.trim();
-			ready.push({ path, branch, ...(base ? { base } : {}) });
-		}
+		else ready.push({ path, branch });
 	}
 	return { ready, unready };
 }
 
 /** The channel's lanes that must be committed and pushed before it moves to a cloud workspace. */
 export async function unready(record: catalog.Listing): Promise<Unready[]> {
-	return (await lanes(record.project, record.prefix)).unready;
+	return (await lanes(record)).unready;
 }
 
 /**
@@ -135,7 +116,7 @@ export async function adoption(record: catalog.Listing) {
 	if (!url || !(await available(record.project))) {
 		throw new Error("Moving to a cloud workspace needs Cloud compute and a GitHub project.");
 	}
-	const { ready, unready } = await lanes(record.project, record.prefix);
+	const { ready, unready } = await lanes(record);
 	if (unready.length) {
 		throw new Error(
 			`The cloud workspace starts from a fresh clone, so commit and push these lanes first, or remove them: ${

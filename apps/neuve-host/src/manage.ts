@@ -1,5 +1,5 @@
 import {extendModels} from "./model-availability";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -17,7 +17,7 @@ import { forkLane } from "./fork-origin";
 import { refusal } from "./http";
 import { models as providers } from "./keys";
 import { preference } from "./preferences";
-import { checkout, git } from "./projects";
+import { checkout, git, workLanes } from "./projects";
 import { isInactive } from "./protocol";
 import { failure, log } from "./log";
 import { stopLaneWorkspaces } from "./lane-workspace";
@@ -182,7 +182,7 @@ export async function archive(id: string, archived: boolean, stopWorkspaces = st
 	catalog.write(record);
 	if (archived && !record.hosted && !record.compute) {
 		await stopChannelLaneWorkspaces(record, stopWorkspaces);
-		await disposeChatLanes(record);
+		await disposeLanes(record, "chat");
 	}
 	return record;
 }
@@ -198,27 +198,31 @@ async function stopChannelLaneWorkspaces(record: catalog.Listing, stop = stopLan
 	}
 }
 
-/** Ownership is durable, not inferred from a folder name; explicit and build lanes stay put. */
-async function disposeChatLanes(record: catalog.Listing): Promise<void> {
-	for (const [name, lane] of Object.entries(record.chatLanes ?? {})) {
+async function disposeLanes(record: catalog.Listing, scope: "chat" | "all"): Promise<void> {
+	const { lanes: folder } = catalog.paths(record.id);
+	const retained = (path: string, error: unknown) =>
+		log("warn", "chat.lane.retained", { channel: record.id, path, ...failure(error) });
+	const lanes = await workLanes(record.project, folder).catch(error => {
+		retained(folder, error);
+		return [];
+	});
+	for (const { name, path, branch } of lanes) {
 		try {
-			const path = join(catalog.paths(record.id).lanes, name);
-			if (!/^chat-\d+$/.test(name) || lane.path !== path || lane.branch !== `${record.prefix}/${name}`) {
-				throw new Error("The work lane does not match its host-owned location and branch");
+			if (scope === "chat") {
+				const owned = record.chatLanes?.[name];
+				if (!owned || record.lane?.path === path || !existsSync(path)) continue;
+				if (!/^chat-\d+$/.test(name) || owned.path !== path || owned.branch !== `${record.prefix}/${name}`) {
+					throw new Error("The work lane does not match its host-owned location and branch");
+				}
+				if (branch !== owned.branch) throw new Error("The work lane's Git registration changed, so it was kept");
 			}
-			if (record.lane?.path === path || !existsSync(path)) continue;
-			const listed = await git(record.project, ["worktree", "list", "--porcelain", "-z"]);
-			if (listed.status !== 0) throw new Error(listed.stderr || "Could not read Git worktrees");
-			const found = listed.stdout.split("\0\0").map(item => item.split("\0")).find(fields => fields[0] === `worktree ${path}`);
-			if (!found?.includes(`branch refs/heads/${lane.branch}`)) throw new Error("The work lane's Git registration changed, so it was kept");
 			// Do not let status.showUntrackedFiles=no hide work from Git's removal check.
 			const removed = await git(record.project, ["worktree", "remove", "--", path], ["status.showUntrackedFiles=normal"]);
 			if (removed.status !== 0) throw new Error((removed.stderr || removed.stdout).trim() || "Git could not remove the work lane");
 			if (existsSync(path)) throw new Error("Git reported removal but the work lane folder remains");
-			log("info", "chat.lane.removed", { channel: record.id, path, branch: lane.branch });
+			log("info", "chat.lane.removed", { channel: record.id, path, branch });
 		} catch (error) {
-			// The channel is archived even when disposal is refused. History and dirty work survive.
-			log("warn", "chat.lane.retained", { channel: record.id, path: lane.path, ...failure(error) });
+			retained(path, error);
 		}
 	}
 }
@@ -263,11 +267,11 @@ async function hold(id: string): Promise<void> {
 }
 
 /**
- * Removes the channel and its state directory's worktrees. Lane branches stay in the project.
+ * Removes the channel and its clean worktrees. Lane branches stay in the project.
  */
 export async function remove(id: string): Promise<void> {
 	const record = catalog.read(id);
-	const { project, hosted, compute } = record;
+	const { hosted, compute } = record;
 	if (compute) {
 		// The service's DELETE also deletes the channel and ends its run, which a frozen channel
 		// (a failed start) would refuse to the host's own kill.
@@ -294,11 +298,8 @@ export async function remove(id: string): Promise<void> {
 		await hold(id);
 		await stopChannelLaneWorkspaces(record);
 	}
-	const { lanes } = catalog.paths(id);
 	try {
-		for (const lane of !(await import("./runtime-hooks")).runtimeHooks().lanes && existsSync(lanes) ? readdirSync(lanes) : []) {
-			await git(project, ["worktree", "remove", "--force", `${lanes}/${lane}`]);
-		}
+		await disposeLanes(record, "all");
 		catalog.remove(id);
 	} catch (error) {
 		if (!hosted) catalog.unlock(id);
