@@ -53,6 +53,10 @@ import {
   chatRuntimeExtension,
   type AccountStatusSource,
 } from "../../src/chat-runtime/index.ts";
+import {
+  planModeExtension,
+  planModeModels,
+} from "../../../channel/src/plan-mode.ts";
 
 export const testModels: RuntimeModel[] = [
   {
@@ -396,6 +400,7 @@ export async function fixture(
     statusModels?: readonly RuntimeModel[];
     runtimes?: readonly RuntimeShape[];
     native?: ReturnType<typeof createModels>;
+    plugins?: NonNullable<Parameters<typeof planModeModels>[2]>;
     toolName?: string;
     executionMode?: "parallel" | "sequential";
     approvals?: Parameters<typeof chatRuntimeExtension>[2];
@@ -468,6 +473,7 @@ export async function fixture(
   };
   const extension = chatRuntimeExtension(bridge, layer.owns, options.approvals);
   const pi = createRegistry();
+  if (options.plugins) pi.install(planModeExtension(async () => false));
   const executed: number[] = [];
   let conversation: Conversation;
   pi.install(
@@ -505,7 +511,9 @@ export async function fixture(
     options.storage ?? new MemoryStorage(),
     {
       registry: pi,
-      models,
+      models: options.plugins
+        ? planModeModels(models, layer.owns, options.plugins)
+        : models,
       settings: {
         retry: { maxRetries: 0 },
         compaction: { enabled: false, keepRecentTokens: 1 },

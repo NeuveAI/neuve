@@ -8,6 +8,8 @@ import {
   stat,
 } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
+import chromeDevToolsLicense from "../../neuve-host/plugins/chrome-devtools/LICENSE.txt" with { type: "text" };
+import chromeDevToolsSkill from "../../neuve-host/plugins/chrome-devtools/skills/chrome-devtools/SKILL.md" with { type: "text" };
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { config as native } from "@ace/host/config";
@@ -174,17 +176,22 @@ export function workspaceConfiguration(input: {
 }
 
 /**
- * Writes the Neuve skill this neuve carries, with its version, into the host's home on every
- * launch, so the workspace's agents have it before anyone installs it.
+ * Writes Ace's carried skills into the host's home on launch.
  */
 export async function writeCarriedSkill(
   home: string,
 ): Promise<{ skills?: string }> {
   const carried = await findSkillSource();
-  if (!carried.found) return {};
   const skills = join(home, "skills");
   await rm(skills, { recursive: true, force: true });
-  await writeSkillShare({ bundle: carried.bundle, shareDirectory: skills });
+  if (carried.found)
+    await writeSkillShare({ bundle: carried.bundle, shareDirectory: skills });
+  const devtools = join(skills, "chrome-devtools");
+  mkdirSync(devtools, { recursive: true });
+  await Promise.all([
+    writeFile(join(devtools, "SKILL.md"), chromeDevToolsSkill),
+    writeFile(join(devtools, "LICENSE"), chromeDevToolsLicense),
+  ]);
   return { skills };
 }
 

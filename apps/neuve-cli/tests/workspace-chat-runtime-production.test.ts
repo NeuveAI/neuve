@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -89,7 +90,11 @@ const MarkerEvent = z.discriminatedUnion("type", [
     hasOAuthToken: z.boolean(),
   }),
   z.object({ type: z.literal("exited"), pid: z.number().int() }),
-  z.object({ type: z.literal("control"), subtype: z.string() }),
+  z.object({
+    type: z.literal("control"),
+    subtype: z.string(),
+    mcpServers: z.array(z.string()).optional(),
+  }),
   z.object({
     type: z.literal("prompt"),
     content: z.union([
@@ -160,6 +165,8 @@ import { createInterface } from 'node:readline';
 const marker = ${JSON.stringify(marker)};
 const record = (event) => appendFileSync(marker, JSON.stringify(event) + '\\n');
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\\n');
+const mcpFlag = process.argv.indexOf('--mcp-config');
+const stdioServers = mcpFlag < 0 ? [] : Object.keys(JSON.parse(process.argv[mcpFlag + 1]).mcpServers);
 record({type:'started', pid:process.pid, cwd:process.cwd(), folder:process.env.CLAUDE_CONFIG_DIR, hasOAuthToken:process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined});
 process.on('SIGTERM', () => process.exit(0));
 process.on('exit', () => record({type:'exited', pid:process.pid}));
@@ -167,7 +174,8 @@ const session = process.argv[process.argv.indexOf('--session-id') + 1];
 for await (const line of createInterface({input:process.stdin})) {
   const message = JSON.parse(line);
   if (message.type === 'control_request') {
-    record({type:'control', subtype:message.request.subtype});
+    const {subtype, sdkMcpServers} = message.request;
+    record({type:'control', subtype, mcpServers:subtype === 'initialize' ? [...stdioServers, ...(sdkMcpServers ?? [])] : undefined});
     send({type:'control_response', response:{subtype:'success', request_id:message.request_id, response:message.request.subtype === 'initialize' ? {
       commands:[], agents:[], account:{tokenSource:process.env.CLAUDE_CODE_OAUTH_TOKEN === undefined ? 'none' : 'CLAUDE_CODE_OAUTH_TOKEN'},
       models:[{value:'default', displayName:'Test default', description:'Fake model'}]
@@ -270,6 +278,8 @@ test("production sources deliver a worker chat through a fake Claude executable 
   );
   // A lost explicit executable must fail locally, even on a machine with real Claude Code installed.
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+  // The worker can discover pi tools independently of what the fake Claude receives.
+  writeFileSync(join(bin, "npx"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   process.env.HOME = at.home;
   process.env.PATH = `${bin}:${previousPath}`;
   const { codingWorkerSetup } = await import("../src/workspace-worker.ts");
@@ -334,9 +344,9 @@ test("production sources deliver a worker chat through a fake Claude executable 
         const extension = setup.extensions?.(worker);
         return {
           extensions: extension?.extensions ?? [],
-          attach: async (attached) => {
+          attach: async (attached, admission) => {
             harness = attached;
-            await extension?.attach?.(attached);
+            await extension?.attach?.(attached, admission);
           },
         };
       },
@@ -403,11 +413,21 @@ test("production sources deliver a worker chat through a fake Claude executable 
     await harness.waitForIdle(BACKGROUND_CONTEXT);
     await until(() => !channel!.busy);
     const events = markerEvents(fake.marker);
-    expect(events.filter((event) => event.type === "started")).toHaveLength(1);
-    expect(events.find((event) => event.type === "started")).toMatchObject({
-      cwd: defaultClaudeWorkingFolder(at.home),
+    const launches = events.filter((event) => event.type === "started");
+    expect(launches).toHaveLength(1);
+    const [started] = launches;
+    if (!started) throw new Error("Claude did not start");
+    expect(realpathSync(started.cwd)).toBe(realpathSync(at.root));
+    expect(started).toMatchObject({
       folder:
         "folder" in account.credential ? account.credential.folder : undefined,
+    });
+    expect(
+      events.find(
+        (event) => event.type === "control" && event.subtype === "initialize",
+      ),
+    ).toMatchObject({
+      mcpServers: expect.arrayContaining(["neuve", "chrome-devtools"]),
     });
     expect(events.filter((event) => event.type === "prompt")).toEqual([
       {

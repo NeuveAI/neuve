@@ -1,16 +1,73 @@
 import { expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Channel, type Fields } from "@ace/channel";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt, getCurrentTools, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { Effect } from "effect";
 
 import { Fixture, OWNER } from "../../../packages/channel/tests/helpers";
-import { policy } from "../../../packages/harness/src/chat-runtime/transcript";
+import { policy, policyKey } from "../../../packages/harness/src/chat-runtime/transcript";
 import { fauxNonTurnModels } from "./fixtures/non-turn-models";
 import { serveOAuthFixture } from "./fixtures/oauth-http";
-import { expandPluginValue, PluginManifest } from "../src/plugin-manifest";
+import { chromeDevToolsPlugin, expandPluginValue, PluginManifest, secretName } from "../src/plugin-manifest";
 import { pluginTools } from "../src/plugin-tools";
+import { config } from "../src/config";
+
+test("Chrome DevTools resolves both host folders without a credential and alone gets a workspace argument", async () => {
+	const home = config.home;
+	const plugin = {
+		...chromeDevToolsPlugin,
+		servers: { ...chromeDevToolsPlugin.servers, plain: { type: "stdio" as const, command: "plain-server", args: ["--identify"] } },
+	};
+	const plugins = pluginTools(() => {}, [plugin], () => ({}));
+	try {
+		config.home = "/Volumes/Example Drive/ace";
+		const folder = realpathSync(import.meta.dir);
+		expect(chromeDevToolsPlugin.variables.size).toBe(0);
+		expect(chromeDevToolsPlugin.credentials.size).toBe(0);
+		expect(secretName("ACE_BROWSER_PROFILE")).toBe(false);
+		expect(plugins.nativeServers?.(folder)).toEqual({
+			"chrome-devtools": {
+				type: "stdio", command: "npx", args: [
+					"-y", "chrome-devtools-mcp@1.14.0", "--autoConnect", "--userDataDir",
+					join(config.home, "browser"), `--workspace=${folder}`,
+					"--experimentalScreencast", "--no-usage-statistics", "--no-performance-crux",
+				],
+				env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
+			},
+			plain: { type: "stdio", command: "plain-server", args: ["--identify"] },
+		});
+		expect(plugins.nativeServers?.()).toBeUndefined();
+		expect(plugins.nativeServers?.("/")).toBeUndefined();
+	} finally {
+		config.home = home;
+		await plugins.close();
+	}
+});
+
+test("the native session policy reopens when Chrome DevTools changes and withholds it for Plan and attended chats", async () => {
+	const plugins = pluginTools(() => {}, [chromeDevToolsPlugin], () => ({}));
+	try {
+		const mcpServers = plugins.nativeServers?.(import.meta.dir);
+		const plan = { role: "system" as const, content: "", timestamp: 0,
+			[Symbol.for("neuve.chat.plan-request")]: true };
+		for (const ownTools of [true, false]) {
+			const configured = { folder: import.meta.dir, ownTools, mcpServers };
+			const handle = () => Effect.succeed({ text: "" });
+			const on = policy([], handle, undefined, configured);
+			const off = policy([], handle, undefined, { ...configured, mcpServers: undefined });
+			expect(on.mcpServers?.["chrome-devtools"]?.command).toBe("npx");
+			expect(policyKey(on)).not.toBe(policyKey(off));
+			expect(policy([plan], handle, undefined, configured).mcpServers).toBeUndefined();
+			expect(policy([], handle, undefined, { ...configured, attended: true }).mcpServers).toBeUndefined();
+		}
+	} finally {
+		await plugins.close();
+	}
+});
 
 // The parser supplies a settings label and limits expansion to the credentials declared in the files.
 test("the manifest resolves the display name and restricts expansion to resolved credentials", () => {
@@ -71,6 +128,130 @@ for await (const line of createInterface({ input: process.stdin })) {
 	console.log(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
 `;
+
+// An MCP peer asks for roots during initialization and returns the scope with an inline image.
+const screenshotServer = String.raw`
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const send = message => console.log(JSON.stringify({ jsonrpc: "2.0", ...message }));
+let roots;
+let pending;
+const workspace = process.argv.find(arg => arg.startsWith("--workspace="));
+const screenshot = (id, { oversized }) => {
+	const data = oversized ? Buffer.alloc(900_001).toString("base64") : "aA==";
+	const scope = {
+		roots,
+		workspace,
+		noUpdateChecks: process.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS,
+		hasPath: Boolean(process.env.PATH),
+	};
+	send({ id, result: { content: [
+		{ type: "image", mimeType: "image/png", data }, { type: "text", text: JSON.stringify(scope) },
+	] } });
+};
+for await (const line of createInterface({ input: process.stdin })) {
+	const { id, method, params, result } = JSON.parse(line);
+	if (method === "initialize") {
+		roots = params.capabilities.roots ? null : [];
+		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "fixture", version: "1" } } });
+	} else if (method === "notifications/initialized") {
+		if (roots === null) send({ id: "roots", method: "roots/list" });
+	} else if (id === "roots") {
+		roots = result.roots;
+		if (pending !== undefined) screenshot(...pending);
+	} else if (method === "tools/list") {
+		send({ id, result: { tools: [{
+			name: "take_screenshot", inputSchema: { type: "object", properties: { oversized: { type: "boolean" } } },
+		}] } });
+	} else if (method === "tools/call") {
+		appendFileSync("devtools-calls.log", params.name + "\n");
+		if (roots === null) pending = [id, params.arguments];
+		else screenshot(id, params.arguments);
+	}
+}
+`;
+
+const devtoolsServer = chromeDevToolsPlugin.servers["chrome-devtools"];
+const workspaceArg = devtoolsServer?.type === "stdio" && devtoolsServer.args?.find(arg => arg.startsWith("--workspace="));
+if (!workspaceArg) throw new Error("Missing the DevTools workspace argument");
+const screenshotPlugin = PluginManifest.parse({
+	manifest: { name: "chrome-devtools", description: "Fixture", defaultEnabled: true },
+	mcp: {
+		"chrome-devtools": {
+			...devtoolsServer,
+			command: process.execPath,
+			args: ["--no-env-file", "--eval", screenshotServer, "--", workspaceArg],
+		},
+	},
+});
+
+const screenshotText = (folder: string) => JSON.stringify({
+	roots: [{ uri: pathToFileURL(folder).href }], workspace: `--workspace=${folder}`,
+	noUpdateChecks: "1", hasPath: true,
+});
+async function screenshotTurn(channel: Fixture, mode: "ace" | "plan", attended: boolean, args?: { oversized?: boolean }) {
+	const tool = "chrome-devtools_take_screenshot";
+	const offer = Promise.withResolvers<boolean>();
+	const blocks = Promise.withResolvers<ToolResultMessage["content"] | undefined>();
+	channel.script(request => {
+		offer.resolve(getCurrentTools(request.messages).some(candidate => candidate.name === tool));
+		return args
+			? fauxAssistantMessage(fauxToolCall(tool, args, { id: "screenshot" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Done");
+	});
+	if (args) channel.script(request => {
+		const result = request.messages.findLast(item => item.role === "toolResult");
+		blocks.resolve(result?.content);
+		return fauxAssistantMessage("Done");
+	});
+	const { submission } = await channel.request<{ submission: number }>({ op: "ask", author: OWNER, text: "Check the browser", mode, attended });
+	expect(await channel.request({ op: "wait", submission })).toBe("done");
+	return { offered: await offer.promise, result: args ? await blocks.promise : undefined };
+}
+
+test("pi offers scoped Chrome DevTools to agents and delivers images and the chat's roots", async () => {
+	let preference: Record<string, boolean> = {};
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => preference);
+	const channel = await Fixture.create({ plugins });
+	try {
+		expect(await screenshotTurn(channel, "ace", false, {})).toEqual({
+			offered: true,
+			result: [
+				{ type: "image", data: "aA==", mimeType: "image/png" },
+				{ type: "text", text: screenshotText(channel.lane.path) },
+			],
+		});
+		const attended = await screenshotTurn(channel, "ace", true, {});
+		const calls = await Bun.file(join(channel.lane.path, "devtools-calls.log")).text();
+		expect({ ...attended, calls }).toEqual({
+			offered: false,
+			result: [{ type: "text", text: "This tool is unavailable in a person-driven chat." }],
+			calls: "take_screenshot\n",
+		});
+		expect((await screenshotTurn(channel, "plan", false)).offered).toBe(false);
+		preference = { "chrome-devtools": false };
+		expect(plugins.nativeServers?.(channel.lane.path)).toBeUndefined();
+		expect((await screenshotTurn(channel, "ace", false)).offered).toBe(false);
+	} finally {
+		await channel.dispose();
+	}
+});
+
+test("pi drops an oversized plugin image and keeps the text with a filePath hint", async () => {
+	const plugins = pluginTools(() => {}, [screenshotPlugin], () => ({}));
+	const channel = await Fixture.create({ plugins });
+	try {
+		const { result } = await screenshotTurn(channel, "ace", false, { oversized: true });
+		expect(result?.map(block => block.type)).toEqual(["text"]);
+		expect(result).toEqual([{
+			type: "text",
+			text: screenshotText(channel.lane.path)
+				+ "\nAn image was too large to include. Save it to a file with filePath.",
+		}]);
+	} finally {
+		await channel.dispose();
+	}
+});
 
 // Exercise the prompt from a real channel request and the bridge policy that consumes it.
 test("connected plugin guidance reaches pi and the bridged policy only while its tools are offered", async () => {

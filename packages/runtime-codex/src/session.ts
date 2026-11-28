@@ -962,6 +962,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     toolServer: string | undefined,
     cwd: string,
     tokenCommand?: CodexTokenCommand,
+    mcpServers?: SessionPolicy["mcpServers"],
   ) =>
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -979,6 +980,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         toolServer,
         cwd,
         tokenCommand,
+        mcpServers,
       ).pipe(Effect.onInterrupt(() => closeScope(scope)));
     });
   const starting = (
@@ -988,6 +990,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
     toolServer: string | undefined,
     cwd: string,
     tokenCommand: CodexTokenCommand | undefined,
+    mcpServers: SessionPolicy["mcpServers"],
   ) =>
     Effect.gen(function* () {
       const gen = ++generation;
@@ -1000,6 +1003,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
           toolServer,
           tokenCommand,
           policy.environment,
+          mcpServers,
         ),
         env: codexEnvironment(
           { ...options.environment, ...policy.environment },
@@ -1326,6 +1330,7 @@ export const openCodexSession = Effect.fnUntraced(function* (
         toolServer,
         options.cwd,
         neuveSignIn?.tokenCommand,
+        policy.mcpServers,
       );
       yield* prepare(next, configuration, allowedSkills, active).pipe(
         // A process that died after its last answer failed its preparation too.
@@ -1472,6 +1477,11 @@ export const openCodexSession = Effect.fnUntraced(function* (
       if (input.final && policy.outputSchema === undefined)
         return yield* turnFailed("no-output-schema");
       if (input.workspace === undefined)
+        return yield* turnFailed("protocol-error");
+      if (
+        policy.mcpServers !== undefined &&
+        input.workspace.folder !== options.cwd
+      )
         return yield* turnFailed("protocol-error");
       const settings = turnSettings(input.workspace, policy.approvalPolicy);
       const active: Turn = {

@@ -95,15 +95,41 @@ export const launchArguments = (
   toolServer: string | undefined,
   tokenCommand?: CodexTokenCommand,
   environment?: SessionPolicy["environment"],
+  mcpServers?: SessionPolicy["mcpServers"],
 ): ReadonlyArray<string> => {
   const variables = Object.entries(environment ?? {});
   const includeOnly = own.includeOnly ?? [];
+  const reserved = new Set(own.mcpServers);
+  const pluginServers =
+    configuration === "own"
+      ? Object.entries(mcpServers ?? {}).flatMap(([name, server]) => {
+          const preferred = `neuve_${name.replace(/[^A-Za-z0-9_]/gu, "_")}`;
+          let alias = preferred;
+          for (let count = 2; reserved.has(alias); count++)
+            alias = `${preferred}_${count}`;
+          reserved.add(alias);
+          const prefix = `mcp_servers.${alias}`;
+          const env = Object.entries(server.env ?? {})
+            .map(
+              ([key, value]) =>
+                `${JSON.stringify(key)}=${JSON.stringify(value)}`,
+            )
+            .join(",");
+          return [
+            `${prefix}.command=${JSON.stringify(server.command)}`,
+            `${prefix}.args=${JSON.stringify(server.args ?? [])}`,
+            ...(env === "" ? [] : [`${prefix}.env={${env}}`]),
+            `${prefix}.default_tools_approval_mode="approve"`,
+          ];
+        })
+      : [];
   return flags([
     ...(tokenCommand === undefined ? [] : chatgptPlan(tokenCommand)),
     ...variables.map(
       ([name, value]) =>
         `shell_environment_policy.set.${name}=${JSON.stringify(value)}`,
     ),
+    ...pluginServers,
     ...(variables.length === 0 || includeOnly.length === 0
       ? []
       : [

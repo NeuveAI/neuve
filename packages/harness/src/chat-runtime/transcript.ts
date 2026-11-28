@@ -197,18 +197,17 @@ export function policy(
     skills?: { home: string; carried?: string | undefined } | undefined;
     ownTools?: boolean;
     pluginTools?: ReadonlySet<string> | undefined;
+    mcpServers?: SessionPolicy["mcpServers"];
     approvals?: boolean;
     attended?: boolean;
   } = {},
 ): SessionPolicy {
   const sandboxed = where.ownTools === true;
-  const planning =
-    sandboxed &&
-    messages.some(
-      (message) =>
-        message.role === "system" &&
-        Reflect.get(message, planningRequest) === true,
-    );
+  const planning = messages.some(
+    (message) =>
+      message.role === "system" &&
+      Reflect.get(message, planningRequest) === true,
+  );
   const approvalPolicy =
     sandboxed && where.approvals && where.attended && !planning
       ? "ask"
@@ -239,20 +238,25 @@ export function policy(
         : `${unavailable} Where these instructions ask you to use one of them first, such as starting a lane before changing files, work in your working folder with your own tools instead: it is the only folder you can write, and this chat's work belongs there. If the work needs one of them, say so in your reply.`,
     );
   }
-  if (planning && served.some((tool) => tool.name === PLAN_TOOL)) {
+  if (sandboxed && planning && served.some((tool) => tool.name === PLAN_TOOL)) {
     prompt.push(
       `Save the plan with Neuve's MCP tool \`${PLAN_TOOL}\`. It works in a read-only workspace.`,
     );
   }
+  const mcpServers =
+    where.folder !== undefined && !planning && !where.attended
+      ? where.mcpServers
+      : undefined;
   return {
     systemPrompt: prompt.filter(Boolean).join("\n\n"),
     tools: definitions(served, handle),
     approvalPolicy,
     turnLimit: TurnLimit.parse(Number.MAX_SAFE_INTEGER),
     ...(model ? { model } : {}),
-    ...(sandboxed && where.folder !== undefined
+    ...(where.folder !== undefined && (sandboxed || mcpServers !== undefined)
       ? { folder: where.folder }
       : {}),
+    ...(mcpServers === undefined ? {} : { mcpServers }),
     ...(where.skills !== undefined && where.folder !== undefined
       ? { skillRoots: skillRoots({ ...where.skills, cwd: where.folder }) }
       : {}),
@@ -264,6 +268,7 @@ export function policyKey(value: SessionPolicy): string {
     folder: value.folder,
     skillRoots: value.skillRoots,
     approvalPolicy: value.approvalPolicy,
+    mcpServers: value.mcpServers,
     tools: value.tools.map(({ name, description, inputSchema }) => ({
       name,
       description,

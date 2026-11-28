@@ -4,14 +4,16 @@
 // in order, release nothing back to the runtime, and send the turn the chat's own folder. pi's
 // shell and file tools and the pass-through itself are never served to such a runtime.
 import { expect, test } from "bun:test";
-import type { SystemMessage } from "@earendil-works/pi-ai";
+import { Type, type SystemMessage } from "@earendil-works/pi-ai";
 import {
   defineExtension,
+  defineTool,
   GenerationTask,
   hook,
   LiveDoc,
 } from "@earendil-works/pi-durable";
 import {
+  Account,
   RuntimeEvent,
   TurnFailed,
   type RuntimeShape,
@@ -28,11 +30,16 @@ import { FakeRuntime, caps, context, fixture, until } from "./fixture.ts";
 
 // Give the bridge the same request marker it receives when a chat is planning.
 test.each([
-  { runtimeName: "Codex-like", ownTools: true },
-  { runtimeName: "Claude subscription-like", ownTools: false },
+  { runtimeName: "Codex-like", ownTools: true, devtools: false },
+  { runtimeName: "Claude subscription-like", ownTools: false, devtools: false },
+  {
+    runtimeName: "Claude subscription-like with DevTools",
+    ownTools: false,
+    devtools: true,
+  },
 ])(
   "plan mode limits tools and workspace access on a $runtimeName runtime",
-  async ({ ownTools }) => {
+  async ({ ownTools, devtools }) => {
     const fake = new FakeRuntime();
     fake.capabilities = {
       ...caps,
@@ -56,7 +63,24 @@ test.each([
         },
       }));
     Object.assign(fake.shape, { openSession: captureWorkspace });
-    const runtime = await fixture({ fake, toolName: "question" });
+    const servers = {
+      "chrome-devtools": {
+        type: "stdio" as const,
+        command: "devtools-fixture",
+      },
+    };
+    const runtime = await fixture({
+      fake,
+      toolName: "question",
+      ...(devtools
+        ? {
+            plugins: {
+              httpTools: () => new Set(),
+              nativeServers: () => servers,
+            },
+          }
+        : {}),
+    });
     try {
       await runtime.conversation.configure({ cwd: "/work/lane" }, context);
       let planning = false;
@@ -70,7 +94,7 @@ test.each([
                   role: "system",
                   content: "",
                   timestamp: 0,
-                  sections: { [ATTENDED_SECTION]: "true" },
+                  sections: { [ATTENDED_SECTION]: String(!devtools) },
                 };
                 if (!planning) return { messages: [...messages, attended] };
                 const offer: SystemMessage = {
@@ -111,6 +135,15 @@ test.each([
       expect(fake.opened.map(({ policy }) => policy.approvalPolicy)).toEqual(
         ownTools ? ["ask", "allow", "ask"] : ["allow", "allow", "allow"],
       );
+      if (devtools) {
+        expect(
+          fake.opened.map(({ policy }) => [policy.folder, policy.mcpServers]),
+        ).toEqual([
+          ["/work/lane", servers],
+          [undefined, undefined],
+          ["/work/lane", servers],
+        ]);
+      }
     } finally {
       await runtime.close();
     }
@@ -180,7 +213,13 @@ test("attended and unattended requests reopen the same chat with the correspondi
   }
 });
 
-test("a running command appears before its result and overlapping work stays in transcript order", async () => {
+test("a Codex chat with DevTools continues after a command and preserves overlapping work in order", async () => {
+  const codex = Account.parse({
+    name: "codex",
+    kind: "chatgpt-subscription",
+    runtime: "codex",
+    credential: { kind: "codex-home" },
+  });
   const fake = new FakeRuntime();
   fake.capabilities = {
     ...caps,
@@ -195,6 +234,8 @@ test("a running command appears before its result and overlapping work stays in 
   let finishWork: (() => void) | undefined;
   (fake as { shape: FakeRuntime["shape"] }).shape = {
     ...fake.shape,
+    kind: "codex",
+    continuation: ({ name }) => ({ runtime: "codex", key: name }),
     openSession: (_account, policy) =>
       Effect.gen(function* () {
         opened.push(policy);
@@ -264,7 +305,43 @@ test("a running command appears before its result and overlapping work stays in 
         } satisfies RuntimeSession as RuntimeSession;
       }),
   };
-  const run = await fixture({ fake, toolName: "question" });
+  const browserTool = "chrome-devtools_list_pages";
+  const run = await fixture({
+    accounts: [codex],
+    fake,
+    toolName: "question",
+    plugins: {
+      httpTools: () => new Set(),
+      nativeTool: (name) => name === browserTool,
+      nativeServers: (folder) =>
+        folder === undefined
+          ? undefined
+          : {
+              "chrome-devtools": {
+                type: "stdio",
+                command: "devtools-fixture",
+                args: [folder],
+              },
+            },
+    },
+  });
+  run.pi.install(
+    defineExtension({
+      name: "ace-plugin-chrome-devtools",
+      tools: [
+        defineTool({
+          name: browserTool,
+          description: "List pages.",
+          parameters: Type.Object({}),
+          execute: async () => {
+            throw new Error(
+              "The bridge must not call pi's Chrome DevTools tool.",
+            );
+          },
+        }),
+      ],
+    }),
+  );
   try {
     await run.conversation.configure({ cwd: "/work/lane" }, context);
     const submitted = run.submit("change the notes");
@@ -299,7 +376,15 @@ test("a running command appears before its result and overlapping work stays in 
     ]);
     if (!finishWork) throw new Error("Work did not start");
     finishWork();
-    expect((await submitted).status).toBe("done");
+    const settled = await submitted;
+    const last = (await run.conversation.context(context)).entries
+      .flatMap((entry) => entry.model ?? [])
+      .findLast((message) => message.role === "assistant");
+    expect(last).toMatchObject({
+      stopReason: "stop",
+      content: [{ type: "text", text: "Done." }],
+    });
+    expect(settled.status).toBe("done");
     const messages = await run.messages();
     const calls = messages.flatMap((m) =>
       m.role === "assistant"
@@ -364,6 +449,14 @@ test("a running command appears before its result and overlapping work stays in 
       "thread-1",
     );
     expect(opened[0]?.folder).toBe("/work/lane");
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.mcpServers).toEqual({
+      "chrome-devtools": {
+        type: "stdio",
+        command: "devtools-fixture",
+        args: ["/work/lane"],
+      },
+    });
     expect(opened[0]?.tools.map((tool) => tool.name)).toEqual(["question"]);
     // A call the bridge did not record, as a model calling the tool would make, gets nothing.
     expect(run.bridge.takeWorkResult("work-forged")).toBeUndefined();

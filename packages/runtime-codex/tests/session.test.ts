@@ -867,6 +867,121 @@ describe("the mode table", () => {
     );
   });
 
+  test("carried stdio servers keep distinct aliases after name normalization", () => {
+    const args = launchArguments(
+      "own",
+      { mcpServers: [], plugins: [], apps: [], exclude: [], skills: [] },
+      undefined,
+      undefined,
+      undefined,
+      {
+        "foo-bar": { type: "stdio", command: "first" },
+        foo_bar: { type: "stdio", command: "second" },
+        "foo.bar": {
+          type: "stdio",
+          command: "third",
+          env: { "FEATURE.MODE": "debug", FEATURE_MODE: "normal" },
+        },
+      },
+    );
+    expect(
+      args.filter(
+        (arg) =>
+          arg.startsWith("mcp_servers.") &&
+          (arg.includes(".command=") || arg.includes(".env")),
+      ),
+    ).toEqual([
+      'mcp_servers.neuve_foo_bar.command="first"',
+      'mcp_servers.neuve_foo_bar_2.command="second"',
+      'mcp_servers.neuve_foo_bar_3.command="third"',
+      'mcp_servers.neuve_foo_bar_3.env={"FEATURE.MODE"="debug","FEATURE_MODE"="normal"}',
+    ]);
+  });
+
+  test("carried stdio servers start with their own arguments in the write process", async () => {
+    const fake = codex();
+    const server = {
+      type: "stdio",
+      command: "npx",
+      args: ["--autoConnect", "--workspace=/work"],
+      env: { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" },
+    } as const;
+    const scoped = {
+      ...policy,
+      mcpServers: {
+        "chrome-devtools": { ...server, args: [...server.args] },
+        plain: {
+          type: "stdio" as const,
+          command: "plain-server",
+          args: ["--identify"],
+        },
+      },
+    };
+    await run(
+      fake,
+      (session, read) =>
+        Effect.gen(function* () {
+          expect(
+            fake.processes.every(
+              ({ args }) =>
+                !args.some((arg) => arg.includes("neuve_chrome_devtools")),
+            ),
+          ).toBe(true);
+          yield* startOn(fake, session, write);
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.command="npx"',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_plain.args=["--identify"]',
+          );
+          expect(fake.current().args).toContain(
+            'mcp_servers.neuve_chrome_devtools.default_tools_approval_mode="approve"',
+          );
+          expect(fake.current().args).not.toContain(
+            "mcp_servers.own-server.enabled=false",
+          );
+          fake.send("turn/completed", completed("completed"));
+          yield* read.next("turn.finished");
+          yield* startOn(fake, session, readOnly);
+          expect(
+            fake
+              .current()
+              .args.some((arg) => arg.includes("neuve_chrome_devtools")),
+          ).toBe(false);
+        }),
+      { policy: scoped },
+    );
+    const personal = {
+      mcpServers: ["chrome_devtools", "neuve_chrome_devtools"],
+      plugins: [],
+      apps: [],
+      exclude: [],
+      skills: [],
+    };
+    const args = launchArguments(
+      "own",
+      personal,
+      undefined,
+      undefined,
+      undefined,
+      scoped.mcpServers,
+    );
+    expect(
+      args.filter((arg) => arg.startsWith("mcp_servers.neuve_chrome_devtools")),
+    ).toEqual([
+      'mcp_servers.neuve_chrome_devtools_2.command="npx"',
+      'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
+      'mcp_servers.neuve_chrome_devtools_2.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
+      'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
+    ]);
+  });
+
   test("a turn without its folder and access is refused before it starts", async () => {
     const fake = codex();
     await run(fake, (session, read) =>
