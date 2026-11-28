@@ -3,7 +3,8 @@
 // an older one is migrated on open, after a backup copy taken under the write lock, by exactly one
 // of several processes opening it together; a newer one is used in compatibility mode. Migrating
 // must leave the shared versions at what older builds accept while the changes are additive, and a
-// failed backup must leave the store as it was. Only real stores and real processes show that.
+// failed backup must leave the store as it was. Opening an existing store must preserve its vacuum
+// mode without waiting for a writer. Only real stores and real processes show that.
 import {
   mkdirSync,
   readdirSync,
@@ -391,6 +392,46 @@ test("reading an uninitialized database refuses; writing creates it at this buil
   expect(await runExisting(location, meta)).toEqual(declared);
   expect(backupsOf(location)).toEqual([]);
 });
+
+test("new stores use incremental vacuum and reopening preserves the mode without waiting for a writer", async () => {
+  const location = freshLocation();
+  const autoVacuum = exec("PRAGMA auto_vacuum");
+  expect(await runOn(location, autoVacuum)).toEqual([{ autoVacuum: 2 }]);
+
+  const older = freshLocation();
+  mkdirSync(older.directory, { recursive: true, mode: 0o700 });
+  const oldDatabase = new Database(older.database);
+  try {
+    oldDatabase.exec("PRAGMA journal_mode = WAL");
+    oldDatabase.exec("CREATE TABLE legacy_data (id INTEGER PRIMARY KEY)");
+  } finally {
+    oldDatabase.close();
+  }
+  expect(await runOn(older, autoVacuum)).toEqual([{ autoVacuum: 0 }]);
+  expect(await runExisting(older, autoVacuum)).toEqual([{ autoVacuum: 0 }]);
+
+  const writer = new Database(location.database);
+  try {
+    writer.exec("BEGIN IMMEDIATE");
+    try {
+      writer.exec(
+        "INSERT INTO records_meta (key, value) VALUES ('uncommitted', 1)",
+      );
+
+      const started = performance.now();
+      const committed = await runExisting(
+        location,
+        Effect.andThen(Store.prepareForRead, meta),
+      );
+      expect(performance.now() - started).toBeLessThan(2000);
+      expect(committed).toEqual(declared);
+    } finally {
+      writer.exec("ROLLBACK");
+    }
+  } finally {
+    writer.close();
+  }
+}, 15000);
 
 // A newer schema that still admits this build is a newer build's upgrade (8.19): migrate changes
 // nothing. Decision 12.24 also admits a newer projector and marks this build's writes.

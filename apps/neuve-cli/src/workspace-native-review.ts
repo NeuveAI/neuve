@@ -542,8 +542,10 @@ export async function readReviewFeedSnapshot(
         "read",
         Effect.gen(function* () {
           const sql = yield* SqlClient;
-          return yield* sql.withTransaction(
-            Effect.gen(function* () {
+          // A deferred WAL snapshot can read while Records holds the write lock.
+          return yield* Effect.acquireUseRelease(
+            sql`BEGIN`,
+            Effect.fnUntraced(function* () {
               const resolved = yield* resolveReview(channel, query);
               const receiptEvent = Option.getOrUndefined(
                 yield* ReviewStats.runReceipt(resolved.query.run),
@@ -678,6 +680,7 @@ export async function readReviewFeedSnapshot(
                 progress,
               };
             }),
+            () => Effect.asVoid(sql`ROLLBACK`),
           );
         }).pipe(
           Effect.provide(
