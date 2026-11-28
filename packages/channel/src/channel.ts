@@ -90,7 +90,7 @@ import {
 	changePlanComment, discardPlanCommentBatch, keepPlanComment, KEPT_PLAN_REPLIES_REASON, planCommentAnswers, planCommentBatch,
 	planComments, PlanCommentPlacements, preparePlanCommentSend, recoverPlanCommentSends, stagePlanCommentBatch, updatePlanCommentDelivery,
 } from "./plan-comments";
-import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
+import { ChatModesDoc, isPlanning, type IsPlanning, planModeExtension, planModeModels, setChatMode, requestPlanExit, reconcilePlanEntry, reconcilePlanExit, type ModeTransition, type PluginOffers } from "./plan-mode";
 import { deferredPluginTool, pluginDiscovery, PLUGIN_SEARCH } from "./plugin-search";
 import { progress } from "./progress";
 import { answer, PersonWaits, Questions } from "./questions";
@@ -523,7 +523,6 @@ export class Channel {
 		// and subscription cannot miss a run transition. LiveDoc forks start empty in pi.
 		channel.#planState = await recoverPlanCommentSends(harness, await harness.snapshot(PlansDoc, context), context);
 		channel.#builds.observe(await harness.snapshot(BuildsDoc, context));
-		await channel.#reconcilePlanExits();
 		await channel.#restoreRunsAndHandoffs(handoffs);
 		channel.#unsubscribe = harness.subscribeCommits(({ changes }) => {
 			const commentMessages = channel.#observePlanCommentSends(changes);
@@ -615,7 +614,7 @@ export class Channel {
 			if (changes.some(change => change.type === "document" && change.record.kind === LiveDoc.definition.kind
 				&& !(change.value as LiveState | null)?.run)
 				&& !channel.#closing.signal.aborted) {
-				const task = channel.#reconcilePlanExits().catch(error => channel.#log("error", "plan.exit.reconcile", failure(error)));
+				const task = channel.#reconcilePlanModes().catch(error => channel.#log("error", "plan.mode.reconcile", failure(error)));
 				channel.#backgroundTasks.add(task);
 				void task.finally(() => channel.#backgroundTasks.delete(task));
 			}
@@ -654,6 +653,7 @@ export class Channel {
 			onApprovalAnswer: send => approvals.registerAnswer(send),
 			requestAttendance: owns => approvals.registerRuntimeModels(owns),
 		});
+		await channel.#reconcilePlanModes();
 		const prepareModels = options.resume !== false && options.prepareModels;
 		const deferred = prepareModels && await channel.#hasRecoverableWork();
 		const feed = Promise.resolve().then(async () => {
@@ -1465,18 +1465,20 @@ export class Channel {
 	async submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean): Promise<Submission | undefined> {
 		await this.#resuming;
 		if (this.#closed) throw new Error("The channel is shutting down");
-		return this.#admitted(handle.id, async () => {
-			if (canSubmit?.() === false) return;
-			await this.#options.prepareModels?.();
-			await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
-			if (canSubmit?.() === false) return;
-			await this.#placeChatLane(handle.id, callContext);
-			if (canSubmit?.() === false) return;
-			const mention = isMentionSubmission(input);
-			const { author, text } = room.input(input.content);
-			const ownerText = mention && author === this.#options.owner ? text : undefined;
-			return this.#submit(handle, input, {}, ownerText, callContext);
-		});
+		return this.#admitted(handle.id, () => this.#submitInput(handle, input, callContext, canSubmit));
+	}
+
+	async #submitInput(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, callContext: Context, canSubmit?: () => boolean) {
+		if (canSubmit?.() === false) return;
+		await this.#options.prepareModels?.();
+		await this.#modelSettings.check(this.#harness, handle.id, {}, callContext);
+		if (canSubmit?.() === false) return;
+		await this.#placeChatLane(handle.id, callContext);
+		if (canSubmit?.() === false) return;
+		const mention = isMentionSubmission(input);
+		const { author, text } = room.input(input.content);
+		const ownerText = mention && author === this.#options.owner ? text : undefined;
+		return this.#submit(handle, input, {}, ownerText, callContext);
 	}
 
 	async #submit(handle: Pick<ConversationHandle, "id" | "submit">, input: InputSubmissionDraft, selection: ModelSelection, ownerText: string | undefined, callContext: Context): Promise<Submission> {
@@ -1711,17 +1713,34 @@ export class Channel {
 		return submission;
 	}
 
-	async #reconcilePlanExits() {
-		const transitions = await this.#harness.commit(async tx => {
+	async #reconcilePlanModes() {
+		const { exits, entries } = await this.#harness.commit(async tx => {
 			const doc = await tx.doc(ChatModesDoc);
-			const transitions: ModeTransition[] = [];
+			const exits: ModeTransition[] = [];
 			for (const id of Object.keys(doc.pendingExits ?? {})) {
 				const transition = await reconcilePlanExit(tx, Number(id) as ConversationId);
-				if (transition) transitions.push(transition);
+				if (transition) exits.push(transition);
 			}
-			return transitions;
+			return { exits, entries: Object.keys(doc.pendingEntries ?? {}) };
 		}, context);
-		for (const transition of transitions) await this.#planExited(transition);
+		for (const transition of exits) await this.#planExited(transition);
+		for (const id of entries) {
+			const chat = Number(id) as ConversationId;
+			const conversation = await this.#harness.conversation(chat, context);
+			if (!conversation) continue;
+			await this.#admitted(chat, async () => {
+				if (this.#closing.signal.aborted) return;
+				const transition = await this.#harness.commit(tx => reconcilePlanEntry(tx, chat), context);
+				if (!transition) return;
+				const { previous, mode } = transition;
+				await this.#publishSelection(chat, mode);
+				this.#log("info", "plan.mode.entered", { chat, previousChatMode: previous, chatMode: mode });
+				await this.#submitInput(conversation, {
+					type: "input", whenBusy: "followUp",
+					content: "[Neuve system note] Plan mode is on. Write the plan for the person's latest request.",
+				}, context);
+			});
+		}
 	}
 
 	async #planExited({ chat, previous, mode, approval }: ModeTransition) {

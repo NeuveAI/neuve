@@ -20,6 +20,7 @@ export type ModeTransition = { chat: ConversationId; previous: ChatMode; mode: C
 
 export const ChatModesDoc = defineDoc<{
 	chats: Record<string, ChatMode>;
+	pendingEntries?: Record<string, true>;
 	pendingExits?: Record<string, PlanExit>;
 }>({
 	kind: "neuve.chat-modes",
@@ -115,6 +116,16 @@ export async function reconcilePlanExit(tx: Tx, chat: ConversationId): Promise<M
 	if (!await checkIdle(tx, chat, doc.chats)) return;
 	await setChatMode(tx, chat, "ace");
 	return { chat, previous: "plan", mode: "ace", approval: { ...approval } };
+}
+
+export async function reconcilePlanEntry(tx: Tx, chat: ConversationId) {
+	const doc = await tx.doc(ChatModesDoc);
+	const entries = doc.pendingEntries;
+	if (!entries?.[chat] || !await checkIdle(tx, chat, doc.chats)) return;
+	delete entries[chat];
+	if (doc.chats[chat] === "plan") return;
+	await setChatMode(tx, chat, "plan");
+	return { chat, previous: "ace", mode: "plan" } as const;
 }
 
 // The bridge strips marked tool offers from the transcript. A true value denotes Plan mode.

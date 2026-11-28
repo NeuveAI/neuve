@@ -69,6 +69,7 @@ import {
   pointer,
   policy,
   policyKey,
+  PLAN_ENTER_TOOL,
   PLAN_TOOL,
   responseId,
   resultText,
@@ -2357,7 +2358,7 @@ function handOver(messages: Context["messages"], fork: number): ContentBlock[] {
     const result = unheld[index + 1];
     return (
       calls.length === 1 &&
-      calls[0]?.name === PLAN_TOOL &&
+      (calls[0]?.name === PLAN_TOOL || calls[0]?.name === PLAN_ENTER_TOOL) &&
       result?.role === "toolResult" &&
       result.toolCallId === calls[0].id &&
       !result.isError

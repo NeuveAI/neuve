@@ -188,6 +188,7 @@ export type Plan = {
 
 /** The tool by which a planning chat's agent writes its plan; the only writer of plan files. */
 export const PLAN_TOOL = "plan_write";
+export const PLAN_ENTER_TOOL = "plan_enter";
 
 // Comments on a plan.
 

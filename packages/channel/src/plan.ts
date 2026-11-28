@@ -4,7 +4,7 @@ import { defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, t
 import type { Admission } from "./extensions";
 import type { Log } from "./log";
 import { ChatModesDoc, type IsPlanning } from "./plan-mode";
-import { PLAN_TOOL, type Plan, type PlanComment } from "./protocol";
+import { PLAN_ENTER_TOOL, PLAN_TOOL, type Plan, type PlanComment } from "./protocol";
 
 declare const crypto: {
 	randomUUID(): string;
@@ -174,6 +174,25 @@ export class Plans {
 						log("info", "plan.written", { chat });
 						return { content: [{ type: "text", text: `Plan ready for approval.\n\n${markdown}` }], control: { terminate: true } };
 					});
+				},
+			}), defineTool({
+				name: PLAN_ENTER_TOOL,
+				description: "Switch this chat to Plan mode, where you write a plan for the person to approve. Use only when the person asks for a plan. First ask them with the question tool, 'Switch this chat to Plan mode?', and call this only if they answer yes. Call on its own. Ends the turn.",
+				parameters: Type.Object({}, { additionalProperties: false }),
+				async execute(_, api, context) {
+					const chat = api.conversationId;
+					if (await planning(chat, context)) {
+						return { isError: true, content: [{ type: "text", text: "This chat is already in Plan mode." }] };
+					}
+					if ((await api.snapshot(LiveDoc, chat, context))?.tools?.length !== 1) {
+						return { isError: true, content: [{ type: "text", text: "Call plan_enter on its own to end the turn." }] };
+					}
+					await api.commit(async tx => {
+						const modes = await tx.doc(ChatModesDoc);
+						modes.pendingEntries ??= {};
+						modes.pendingEntries[chat] = true;
+					}, context);
+					return { content: [{ type: "text", text: "Plan mode will start after this turn." }], control: { terminate: true } };
 				},
 			})],
 		});

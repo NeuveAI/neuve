@@ -76,7 +76,10 @@ test("only planning requests tell the agent to deliver a plan or revision with o
 		expect(prompts[0]).toContain(instruction);
 		expect(prompts[1]).not.toContain(instruction);
 		expect(tools[0]).toContain("plan_write");
+		expect(tools[0]).not.toContain("plan_enter");
 		expect(tools[1]).not.toContain("plan_write");
+		expect(tools[1]).toContain("plan_enter");
+		expect(prompts[1]).not.toContain("Plans for the person to approve are written in Plan mode");
 	} finally {
 		await run.channel.close();
 	}
@@ -283,6 +286,61 @@ const question = (id: string) => fauxAssistantMessage(fauxToolCall("question", {
 		multiple: false,
 	}],
 }, { id }), { stopReason: "toolUse" });
+
+test.each(["Yes", "No"])("Plan mode follows the person's answer of %s", async answer => {
+	const fixture = await Fixture.create({ planFiles: { stage: async () => {}, read: async (_file, _hash, bytes) => bytes } });
+	const watch = await fixture.watch({ op: "watch", plans: true });
+	const text = "Make a plan to add a settings shortcut";
+	const prompt = "Switch this chat to Plan mode?";
+	try {
+		fixture.script(fauxAssistantMessage(fauxToolCall("question", { questions: [{
+			header: "Plan mode", question: prompt, multiple: false,
+			options: [
+				{ label: "Yes", description: "Switch to Plan mode" },
+				{ label: "No", description: "Keep this chat's mode" },
+			],
+		}] }, { id: "ask-plan-mode" }), { stopReason: "toolUse" }), request => {
+			const result = request.messages.findLast(message => message.role === "toolResult" && message.toolCallId === "ask-plan-mode");
+			expect(result?.content).toEqual([{ type: "text", text: JSON.stringify({
+				answeredBy: OWNER, answers: [{ question: prompt, choices: [answer] }],
+			}) }]);
+			return answer === "Yes"
+				? fauxAssistantMessage(fauxToolCall("plan_enter", {}, { id: "enter-plan" }), { stopReason: "toolUse" })
+				: fauxAssistantMessage("Keeping the current mode.");
+		});
+		if (answer === "Yes") fixture.script(async request => {
+			expect(request.messages.findLast(message => message.role === "user")?.content).toContain("Plan mode is on");
+			const tools = getCurrentTools(request.messages).map(tool => tool.name);
+			expect(tools).toContain("plan_write");
+			expect(tools).not.toContain("plan_enter");
+			expect((await fixture.channel.info()).chats[0]).toMatchObject({ mode: "plan" });
+			return fauxAssistantMessage(fauxToolCall("plan_write", { text: "# Settings shortcut" }, { id: "write-plan" }), { stopReason: "toolUse" });
+		});
+		const { submission } = await fixture.request<{ submission: number }>({ op: "ask", author: OWNER, text });
+		await watch.until("tool", event => event.call === "ask-plan-mode");
+		expect((await fixture.channel.info()).chats[0]).toMatchObject({ mode: "ace", busy: true });
+		await fixture.request({ op: "answer", author: OWNER, call: "ask-plan-mode", answers: [{ choices: [answer === "Yes" ? 0 : 1] }] });
+		if (answer === "Yes") {
+			expect(await watch.until("result", event => event.call === "enter-plan")).toMatchObject({ error: false });
+			expect(await fixture.request({ op: "wait", submission })).toBe("done");
+			expect(await watch.until("agent", event => event.mode === "plan")).toMatchObject({ chat: ROOT_CONVERSATION_ID });
+			const { plans } = await watch.until("plans", event => event.plans.length > 0);
+			expect(plans[0]).toMatchObject({ call: "write-plan", title: "Settings shortcut", state: "draft" });
+			expect(watch.of("message").filter(event => event.text === text)).toHaveLength(1);
+			expect(fixture.log.filter(entry => entry.event === "plan.mode.entered")).toEqual([{
+				level: "info", event: "plan.mode.entered",
+				fields: { channel: "one", chat: ROOT_CONVERSATION_ID, previousChatMode: "ace", chatMode: "plan" },
+			}]);
+		} else {
+			expect(await fixture.request({ op: "wait", submission })).toBe("done");
+			expect((await fixture.channel.info()).chats[0]).toMatchObject({ mode: "ace", busy: false });
+			expect(fixture.faux.state.callCount).toBe(2);
+		}
+	} finally {
+		await watch.stop();
+		await fixture.dispose();
+	}
+});
 
 // A question keeps the actual pi run busy while a person's second message crosses the same ingress.
 test.each([OWNER, "teammate"])("%s can keep, but cannot switch, a busy chat's mode", async (author) => {

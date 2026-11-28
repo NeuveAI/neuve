@@ -63,14 +63,19 @@ const texts = (input: unknown) =>
   );
 const HISTORY = "Previous conversation, newest first.";
 
-test.each([false, true])(
-  "handover only warns after a failed standalone plan write (%s)",
-  async (isError) => {
+test.each([
+  ["plan_write", false],
+  ["plan_write", true],
+  ["plan_enter", false],
+  ["plan_enter", true],
+] as const)(
+  "handover only warns after a failed standalone %s call (error: %s)",
+  async (toolName, isError) => {
     const fake = runtimeWith(false);
     fake.capabilities.ownTools = true;
     const run = await fixture({
       fake,
-      toolName: "plan_write",
+      toolName,
       execute: async () => ({
         content: [{ type: "text", text: "Plan result" }],
         isError,
@@ -79,7 +84,7 @@ test.each([false, true])(
     });
     try {
       fake.frames.push({
-        calls: [{ callId: "plan", toolName: "plan_write", input: { n: 1 } }],
+        calls: [{ callId: "plan", toolName, input: { n: 1 } }],
       });
       await run.submit("Write the plan");
       await closed(run, 0);
