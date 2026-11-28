@@ -1,17 +1,9 @@
 import type { Context } from "@earendil-works/chord";
-import {
-	configure,
-	type ConversationId,
-	defineDoc,
-	defineExtension,
-	defineTool,
-	type Extension,
-	LiveDoc,
-} from "@earendil-works/pi-durable";
+import { type ConversationId, defineDoc } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { z } from "zod";
 
-import { git, quote, run, type GitCommand } from "./git";
+import { git, type GitCommand } from "./git";
 import { toolArguments, toolRefusal } from "./tool-arguments";
 
 /**
@@ -56,9 +48,6 @@ export function checkWorkLaneName(args: LaneChange) {
 	// Pi recovery can execute an intent recorded before the schema required this name.
 	if (!laneChangeFields.name.safeParse(args.name).success) laneArguments.prepareArguments(args);
 }
-
-/** The initial channel name remains the lane prefix after a rename. */
-export type Place = { name: string; project: string };
 
 /** A lane's base and the commit a new worktree starts from. */
 export type Selection = { base: string; commit: string };
@@ -155,90 +144,4 @@ export async function selectWorkLaneBase(env: ExecutionEnv, project: string, arg
 			`base: ${reason.trim()}, so specify a local branch, tag, or commit such as "HEAD".`,
 		]);
 	}
-}
-
-export function lanes(place: Place): Extension {
-	return defineExtension({
-		name: "ace-lanes",
-		tools: [
-			defineTool({
-				...laneArguments,
-				description:
-					"Start a work lane (an isolated Git worktree and branch, created with the lane CLI) for a new unit of work, switch to an existing work lane, or list work lanes. A new work lane starts from origin's default branch, fetched first, or from the project's HEAD without origin, unless base names a branch, tag, or commit; a remote branch such as origin/release is fetched first. The work lane's Diff compares against that base. Passing base for an existing work lane only changes what its Diff compares against; it never moves the worktree or changes the base lane push rebases onto. Starting or switching makes the work lane your working directory.",
-				// A rerun reuses its memoized base and finds the worktree lane created.
-				replay: "safe",
-				executionMode: "sequential",
-				execute: async (args, api, context) => {
-					const env = api.env!;
-					if (args.action === "list") {
-						const state = await api.snapshot(LanesDoc, context);
-						const names = Object.keys(state?.lanes || {});
-						return { content: [{ type: "text", text: names.join("\n") || "No work lanes yet." }] };
-					}
-					checkWorkLaneName(args);
-					const { action, name, base } = args;
-					const branch = `${place.name}/${name}`;
-					const recorded = (await api.snapshot(LanesDoc, context))?.lanes[name];
-					// `lane new` puts a lane at .lane/trees/<name>. Lanes started before Ace used it keep
-					// their worktrees in the channel's directory.
-					const created = `${place.project}/.lane/trees/${branch}`;
-					let path = recorded?.path || created;
-					const exists = await env.exists(path, context);
-					if (!exists.ok) throw exists.error;
-					if (action === "switch" && !exists.value) throw missingWorkLane(args);
-					await guard(
-						recorded?.chat,
-						api.conversationId,
-						(chat) => api.snapshot(LiveDoc, chat, context),
-						args,
-					);
-					// The selection is durable before the worktree exists, so a rerun after a crash doesn't
-					// fetch again.
-					let selection = await api.memo<Selection>("selection", context);
-					if (!selection && (base || !exists.value)) {
-						selection = await api.memo(
-							"selection",
-							await selectWorkLaneBase(env, place.project, args, context),
-							context,
-						);
-					}
-					// lane clones ignored files such as node_modules by reference and records the base that
-					// `lane push` rebases onto.
-					if (!exists.value) {
-						path = created;
-						await run(
-							env,
-							`lane new ${quote(branch)} --base ${quote(selection!.base)}`,
-							context,
-							{ cwd: place.project },
-						);
-					}
-					// Another chat can take the lane while this call fetches, so ownership is checked again
-					// where it is claimed, and the lane keeps the base committed by then.
-					const target = await api.commit(async (tx) => {
-						const doc = await tx.doc(LanesDoc);
-						const current = doc.lanes[name];
-						await guard(current?.chat, api.conversationId, (chat) => tx.doc(LiveDoc, chat), args);
-						const target = selection?.base || current?.base;
-						doc.lanes[name] = {
-							chat: api.conversationId,
-							path,
-							...(target ? { base: target } : {}),
-						};
-						await configure(tx, api.conversationId, { cwd: path });
-						return target;
-					}, context);
-					const verb = exists.value ? "Switched to" : "Started";
-					const from = exists.value ? "" : ` from ${selection!.commit.slice(0, 12)}`;
-					const against = target ? `. Its Diff compares against ${target}` : "";
-					return {
-						content: [{
-							type: "text",
-							text: `${verb} work lane ${name} on branch ${branch}${from} at ${path}${against}`,
-						}],
-					};
-				},
-			}),
-		],
-	});
 }

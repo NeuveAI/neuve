@@ -13,6 +13,7 @@ import * as catalog from "./catalog";
 import { Connection, hostedAuth, request } from "./client";
 import { frozen } from "./compute";
 import { config } from "./config";
+import { forkLane } from "./fork-origin";
 import { refusal } from "./http";
 import { models as providers } from "./keys";
 import { preference } from "./preferences";
@@ -118,39 +119,15 @@ export async function fork(id: string, author: string): Promise<catalog.Listing>
 	const lane = changes.lane
 		? {
 			name: changes.lane,
-			path: `${source.project}/.lane/trees/${record.prefix}/${changes.lane}`,
+			path: await forkLane(source.project, `${record.prefix}/${changes.lane}`, changes.head, record.id, changes.lane),
 			// The source's fork point, so the Diff shows its commits as well as the fork's own.
 			base: changes.base,
 		}
 		: undefined;
-	if (lane) {
-		const place = (await import("./runtime-hooks")).runtimeHooks().forkLane;
-		if (place) lane.path = await place(source.project, `${record.prefix}/${lane.name}`, changes.head, record.id, lane.name);
-		else await newLane(source.project, `${record.prefix}/${lane.name}`, changes.head);
-	}
 	const saved = catalog.save(lane ? { ...record, lane } : record);
 	await (await import("./runtime-hooks")).runtimeHooks().onFork?.(id, record.id);
 	await request(record.id, { op: "say", author, text: seed(info, changes, lane) });
 	return saved;
-}
-
-async function newLane(project: string, branch: string, base: string): Promise<void> {
-	// Ace's lane is in the helpers directory on the adopted PATH, which `env` makes Bun search.
-	const child = Bun.spawn(["lane", "new", branch, "--base", base], {
-		cwd: project,
-		env: process.env,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [stdout, stderr, status] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	if (status !== 0) {
-		throw new Error(`Could not start lane ${branch}: ${(stderr || stdout).trim()}`);
-	}
 }
 
 function seed(info: ChannelInfo, changes: Changes, lane: { name: string } | undefined): string {
@@ -286,8 +263,7 @@ async function hold(id: string): Promise<void> {
 }
 
 /**
- * Removes the channel and the lane worktrees in its directory, which predate the lane CLI; lane
- * branches stay in the project. Lanes `lane new` created stay too, for `lane prune` or `lane rm`.
+ * Removes the channel and its state directory's worktrees. Lane branches stay in the project.
  */
 export async function remove(id: string): Promise<void> {
 	const record = catalog.read(id);

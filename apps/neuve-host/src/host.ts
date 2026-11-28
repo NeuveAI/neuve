@@ -27,7 +27,6 @@ export async function startHost(options: HostOptions): Promise<Host> {
 	const release = acquireHome(config.home);
 	configureRuntime({host: options, modelAvailability: options.models,
 		onFork: async (source, child) => (await import("./fork-origin")).forkOrigin(source, child),
-		forkLane: async (...args) => (await import("./fork-origin")).forkLane(...args),
 		listening(port) {
 		config.port = port;
 		process.env.NEUVE_HOST_CONFIG = JSON.stringify(config);

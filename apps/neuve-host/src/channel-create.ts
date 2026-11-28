@@ -33,7 +33,7 @@ async function base(dir: string, revision: string): Promise<string> {
 /**
  * The root chat's lane for a new channel: the worktree `requested` names, once it proves to be a
  * worktree of the project's repository outside the checkout, or else a new `work` lane the host
- * creates from the project's HEAD, as the lane tool would.
+ * creates from the project's HEAD.
  */
 export async function lane(
 	record: catalog.Listing,
