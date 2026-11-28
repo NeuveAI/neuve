@@ -3,6 +3,11 @@ import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 
 export type GitCommand = readonly [subcommand: string, ...args: string[]];
 
+export function isBranchPrefix(value: string): boolean {
+	return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,39}$/.test(value)
+		&& value !== "HEAD" && !value.includes("..") && !value.endsWith(".") && !value.endsWith(".lock");
+}
+
 // .gitmodules can override config defaults, so use flags for commands that can recurse.
 const submoduleFlags = new Map<string, readonly string[]>([
 	["diff", ["--ignore-submodules=dirty", "--submodule=short"]],

@@ -161,7 +161,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 	const setup = runtimeHooks().worker;
 	const plans = resolve(stateDirectory, "plans");
 	const place = config.lanes && {
-		name: options.prefix || options.name, project: options.project, lanes: join(config.lanes, options.id), env: options.env,
+		name: options.prefix || options.name, project: options.project, lanes: catalog.paths(options.id).lanes, env: options.env,
 	};
 	const laneExtensions = place ? [externalLanes(place)] : [];
 	const files = planFiles(plans);

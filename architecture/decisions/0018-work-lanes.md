@@ -30,7 +30,11 @@ A setting applies to channels created after it changes. No new settings system i
 
 **The plan's branch has a worktree for now.** [17.57](../../process/decisions.md) says the plan's branch needs no worktree, because in its design each agent works in an isolate and the host only fast-forwards the plan's ref. Until isolates exist, the plan's branch is the first implementer's lane branch, which has one. The coordinator's reading: 17.57's "needs no worktree" applies once isolates are built.
 
-**Open, for the owner:** whether every new lane given no base starts from origin's default branch (fetched), as the lane tool does, or from the project's checkout, as chat lanes and the first lane do today; and whether a channel given an existing worktree outside the lanes folder counts as a lane, which decides whether Codex's Git grants ([17.1](../../process/decisions.md), [17.82](../../process/decisions.md)) apply there. Until then Codex's grants keep their current test, a linked worktree on a namespaced branch.
+**Open, for the owner; both stay exactly as they are today until the owner rules:**
+- Where a new lane given no base starts. The lane tool starts it from origin's default branch, fetched. Chat lanes, build lanes and the first lane start from the project's checkout.
+- Whether a channel given an existing worktree outside the lanes folder counts as a lane. That decides whether Codex's Git grants ([17.1](../../process/decisions.md), [17.82](../../process/decisions.md)) apply there. Until then the grants keep their current test: a linked worktree on a namespaced branch.
+
+**Known disagreement, left until compute is built:** the cloud service accepts imported lanes only inside `<project>/.lane/trees` (`services/compute/runner.ts`), so a channel whose lanes live in its lanes folder can't move to a cloud workspace yet. Compute isn't turned on anywhere.
 
 ## Consequences
 

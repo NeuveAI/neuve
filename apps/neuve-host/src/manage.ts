@@ -119,7 +119,7 @@ export async function fork(id: string, author: string): Promise<catalog.Listing>
 	const lane = changes.lane
 		? {
 			name: changes.lane,
-			path: await forkLane(source.project, `${record.prefix}/${changes.lane}`, changes.head, record.id, changes.lane),
+			path: await forkLane(record, changes.head, changes.lane),
 			// The source's fork point, so the Diff shows its commits as well as the fork's own.
 			base: changes.base,
 		}

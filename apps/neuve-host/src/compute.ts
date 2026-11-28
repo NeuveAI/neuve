@@ -8,14 +8,24 @@ import type { ModelRef } from "@ace/channel/protocol";
 
 import * as catalog from "./catalog";
 import { hostedAuth } from "./client";
+import * as directory from "./directory";
 import { project as repoOf } from "./github";
 import { refusal } from "./http";
 import { project } from "./manage";
-import { compute } from "./preferences";
+import { computePreference } from "./preferences";
 import { git, workLanes } from "./projects";
+import type { Compute } from "./protocol";
 
 /** Startup clones the repository; the service gives its own container 120 seconds to boot. */
 const CONNECT_WAIT = 5 * 60_000;
+
+/** The team's directory supplies Cloud compute only when the host has no saved setting. */
+export function computeSettings(): Compute {
+	const own = computePreference();
+	if (own) return own;
+	const team = directory.read().compute;
+	return team ? { enabled: true, url: team } : { enabled: false, url: null };
+}
 
 async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
 	let response: Response;
@@ -47,7 +57,7 @@ async function author(root: string): Promise<{ name: string; email: string }> {
 
 /** Whether this host can move a channel in `root` to a cloud workspace. */
 export async function available(root: string): Promise<boolean> {
-	const { enabled, url } = compute();
+	const { enabled, url } = computeSettings();
 	return enabled && !!url && !!(await repoOf(root));
 }
 
@@ -112,7 +122,7 @@ export async function unready(record: catalog.Listing): Promise<Unready[]> {
  * this host, so the workspace serves its clone at the same project path.
  */
 export async function adoption(record: catalog.Listing) {
-	const { url } = compute();
+	const { url } = computeSettings();
 	if (!url || !(await available(record.project))) {
 		throw new Error("Moving to a cloud workspace needs Cloud compute and a GitHub project.");
 	}
@@ -146,7 +156,7 @@ export async function create(
 	model: ModelRef | undefined,
 	name: string | undefined,
 ): Promise<catalog.Listing> {
-	const { enabled, url } = compute();
+	const { enabled, url } = computeSettings();
 	if (!enabled || !url) throw new Error("Turn on Cloud compute in Settings → Beta first.");
 	const root = await project(dir);
 	const repo = await repoOf(root);

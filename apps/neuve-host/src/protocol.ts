@@ -316,6 +316,8 @@ export type PluginSettings = {
 export type Settings = {
 	providers: ProviderSettings[];
 	plugins: PluginSettings[];
+	lanesFolder: string;
+	branchPrefix: string;
 	model: ModelRef | null;
 	modelOverride?: ModelRef;
 	models: ModelRef[];
@@ -385,7 +387,7 @@ export type HostRequest =
 	/** The projects folder, where a clone by URL goes unless the person picks another folder. */
 	| { op: "folder" }
 	/** Each field present is saved; the others keep their saved values. */
-	| { op: "preferences"; model?: ModelRef | null; compute?: Compute; folder?: string; plugins?: Record<string, boolean> }
+	| { op: "preferences"; model?: ModelRef | null; compute?: Compute; folder?: string; lanesFolder?: string; branchPrefix?: string; plugins?: Record<string, boolean> }
 	/** Saves or removes, in the keychain, a variable a carried plugin's servers receive. */
 	| { op: "plugin-key-set"; plugin: string; name: string; value: string }
 	| { op: "plugin-key-remove"; plugin: string; name: string }

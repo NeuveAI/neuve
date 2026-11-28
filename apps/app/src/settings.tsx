@@ -406,6 +406,25 @@ export function Settings(
 												await host.request({ op: "preferences", folder: value });
 											}}
 										/>
+										<TextRow
+											label="Lanes folder"
+											description="Where new channels keep their work lanes"
+											saved={result.settings?.lanesFolder}
+											disabled={offline}
+											onSave={async (value) => {
+												await host.request({ op: "preferences", lanesFolder: value });
+											}}
+										/>
+										<TextRow
+											label="Branch prefix"
+											description="What new channels' branch names start with"
+											placeholder="none"
+											saved={result.settings?.branchPrefix}
+											disabled={offline}
+											onSave={async (value) => {
+												await host.request({ op: "preferences", branchPrefix: value });
+											}}
+										/>
 									</Group>
 									<Group title="Models">
 										<DefaultModel settings={result.settings} disabled={offline} />
