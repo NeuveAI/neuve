@@ -181,8 +181,7 @@ export async function openChannel(options: Options, stateDirectory: string): Pro
 		},
 		...(repo ? { pulls: {
 			repo, gh: runGh,
-			git: args => git(place.project, ["--no-optional-locks", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-				"-c", "protocol.ext.allow=never", ...args]),
+			git: args => git(place.project, args, ["protocol.ext.allow=never"]),
 		} } : {}),
 		async worktree(...[target, source]) {
 			if (typeof target === "string") return buildWorktree(place, target, BACKGROUND_CONTEXT, source);

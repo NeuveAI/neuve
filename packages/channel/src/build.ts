@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import type { Channel } from "./channel";
 import type { Admission } from "./extensions";
+import type { GitCommand } from "./git";
 import { LanesDoc } from "./lanes";
 import { failure, type Log } from "./log";
 import { checkedPlanText, findPlan, PlansDoc, type StoredPlan } from "./plan";
@@ -29,7 +30,7 @@ export type BuildHost = {
 	pulls?: {
 		repo: string;
 		gh(args: string[], body?: string): Promise<string>;
-		git(args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }>;
+		git(args: GitCommand): Promise<{ status: number | null; stdout: string; stderr: string }>;
 	};
 	query?: {
 		sessionId: string;
