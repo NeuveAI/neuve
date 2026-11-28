@@ -877,17 +877,24 @@ describe("the mode table", () => {
       {
         "foo-bar": { type: "stdio", command: "first" },
         foo_bar: { type: "stdio", command: "second" },
-        "foo.bar": { type: "stdio", command: "third" },
+        "foo.bar": {
+          type: "stdio",
+          command: "third",
+          env: { "FEATURE.MODE": "debug", FEATURE_MODE: "normal" },
+        },
       },
     );
     expect(
       args.filter(
-        (arg) => arg.startsWith("mcp_servers.") && arg.includes(".command="),
+        (arg) =>
+          arg.startsWith("mcp_servers.") &&
+          (arg.includes(".command=") || arg.includes(".env")),
       ),
     ).toEqual([
       'mcp_servers.neuve_foo_bar.command="first"',
       'mcp_servers.neuve_foo_bar_2.command="second"',
       'mcp_servers.neuve_foo_bar_3.command="third"',
+      'mcp_servers.neuve_foo_bar_3.env={"FEATURE.MODE"="debug","FEATURE_MODE"="normal"}',
     ]);
   });
 
@@ -928,7 +935,7 @@ describe("the mode table", () => {
             'mcp_servers.neuve_chrome_devtools.args=["--autoConnect","--workspace=/work"]',
           );
           expect(fake.current().args).toContain(
-            'mcp_servers.neuve_chrome_devtools.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS="1"',
+            'mcp_servers.neuve_chrome_devtools.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
           );
           expect(fake.current().args).toContain(
             'mcp_servers.neuve_plain.args=["--identify"]',
@@ -970,7 +977,7 @@ describe("the mode table", () => {
     ).toEqual([
       'mcp_servers.neuve_chrome_devtools_2.command="npx"',
       'mcp_servers.neuve_chrome_devtools_2.args=["--autoConnect","--workspace=/work"]',
-      'mcp_servers.neuve_chrome_devtools_2.env.CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS="1"',
+      'mcp_servers.neuve_chrome_devtools_2.env={"CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS"="1"}',
       'mcp_servers.neuve_chrome_devtools_2.default_tools_approval_mode="approve"',
     ]);
   });

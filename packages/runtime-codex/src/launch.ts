@@ -109,12 +109,16 @@ export const launchArguments = (
             alias = `${preferred}_${count}`;
           reserved.add(alias);
           const prefix = `mcp_servers.${alias}`;
+          const env = Object.entries(server.env ?? {})
+            .map(
+              ([key, value]) =>
+                `${JSON.stringify(key)}=${JSON.stringify(value)}`,
+            )
+            .join(",");
           return [
             `${prefix}.command=${JSON.stringify(server.command)}`,
             `${prefix}.args=${JSON.stringify(server.args ?? [])}`,
-            ...Object.entries(server.env ?? {}).map(
-              ([key, value]) => `${prefix}.env.${key}=${JSON.stringify(value)}`,
-            ),
+            ...(env === "" ? [] : [`${prefix}.env={${env}}`]),
             `${prefix}.default_tools_approval_mode="approve"`,
           ];
         })
